@@ -20,7 +20,7 @@ A sidebar panel for Home Assistant that finds **outliers in recorded sensor valu
   - **Plausible range**: your own min / max per entity, always applied.
 - Actions per outlier: **replace with the expected value** (✓), **edit**, **delete**; bulk actions for a selection.
 - Counters (`total_increasing`, energy): fixes are applied as a sum adjustment from that hour onward – the same thing *Developer tools → Statistics → Adjust sum* does.
-- **Scan all** checks every entity and lists the ones with outliers first.
+- **Scan all** checks every entity and lists the ones with outliers first; the period is chosen right next to the button (default from the settings).
 - **Automatic scan** daily or weekly with a **notification** (Home Assistant notification and/or a `notify.*` service such as the Companion app), optionally only about new outliers.
 - **Orphaned entities** (deleted, but history still in the database) can be removed with the recorder's own purge functions, with a safety backup first.
 - Snippets to prevent new outliers: Home Assistant `filter` sensor and ESPHome filters, prefilled from the analysis.
