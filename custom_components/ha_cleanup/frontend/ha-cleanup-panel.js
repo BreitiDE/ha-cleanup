@@ -184,7 +184,17 @@ dialog::backdrop { background:rgba(11,11,11,.45); }
 .toast.err { background:var(--critical); color:#fff; }
 .toast button { font:inherit; font-weight:600; background:none; border:0; color:var(--accent); cursor:pointer; padding:0; }
 footer { color:var(--muted); font-size:12px; display:flex; flex-wrap:wrap; gap:16px; }
+/* analysis overlay */
+.overlay { position:fixed; inset:0; z-index:40; background:rgba(11,11,11,.55); overflow:auto; overscroll-behavior:contain; padding:24px 20px; }
+.sheet { max-width:1400px; margin:0 auto; background:var(--page); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }
+.sheet-head { position:sticky; top:-24px; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:14px 20px;
+  background:var(--surface); border-bottom:1px solid var(--border); border-radius:12px 12px 0 0; }
+.sheet-head .ttl { min-width:0; margin-right:auto; }
+.sheet-head h2 { font-size:17px; }
+.sheet-head .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.sheet-body { padding:16px 20px 20px; display:flex; flex-direction:column; gap:16px; }
 @media (max-width:980px) { .ov { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:700px) { .overlay { padding:0; } .sheet { border-radius:0; min-height:100%; } .sheet-head { top:0; border-radius:0; } .sheet-body { padding:12px; } }
 @media (max-width:700px) { .target, .who { margin-left:0; } .wrap { padding:0 12px; } }
 `;
 
@@ -322,6 +332,23 @@ class HaCleanupPanel extends HTMLElement {
         <section class="view" id="view-logs" hidden></section>
         <footer><span>Home Assistant Cleanup ${VERSION}</span><span id="foot"></span></footer>
       </main>
+      <div class="overlay" id="ana" hidden role="dialog" aria-modal="true" aria-labelledby="ana-title">
+        <div class="sheet">
+          <div class="sheet-head">
+            <div class="ttl"><h2 id="ana-title">–</h2><div class="sub mono" id="ana-id"></div></div>
+            <div class="ctl">
+              <select id="source" aria-label="Data source">${Object.entries(SOURCES).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>
+              <select id="days" aria-label="Period">${PERIODS.map(([d, l]) => `<option value="${d}">${l}</option>`).join("")}</select>
+              <button class="icon-btn" data-act="reanalyze" title="Reload" aria-label="Reload">${I.restore}</button>
+              <button class="icon-btn" data-act="close-ana" title="Close (Esc)" aria-label="Close">${I.x}</button>
+            </div>
+          </div>
+          <div class="sheet-body">
+            <section class="card" id="ov-card"></section>
+            <section class="card" id="out-card" hidden></section>
+          </div>
+        </div>
+      </div>
       <dialog id="dlg"></dialog>`;
     const root = this.shadowRoot;
     root.querySelector("nav").addEventListener("click", (e) => { const b = e.target.closest("button[data-view]"); if (b) this.show(b.dataset.view); });
@@ -332,7 +359,9 @@ class HaCleanupPanel extends HTMLElement {
     root.addEventListener("keydown", (e) => this.onKey(e));
     root.addEventListener("focusin", (e) => { if (e.target.id === "picker") this.openDropdown(); });
     root.addEventListener("mousedown", (e) => { if (!e.composedPath().some((n) => n.classList?.contains?.("picker"))) this.closeDropdown(); });
-    this._resize = new ResizeObserver(() => { if (this.S.result && this.S.view === "entities") this.drawChart(); });
+    this._resize = new ResizeObserver(() => { if (this.S.result && this.S.anaOpen) this.drawChart(); });
+    this._resize.observe(this.$("ana").querySelector(".sheet"));
+    this.$("ana").addEventListener("mousedown", (e) => { if (e.target === this.$("ana")) this.closeAna(); });
     this.show(this.S.view);
     this.loadInfo();
     this.loadLastScan();
@@ -396,15 +425,10 @@ class HaCleanupPanel extends HTMLElement {
             <input type="search" id="picker" placeholder="Search entities: name, entity_id, unit …" autocomplete="off" spellcheck="false" aria-label="Search entity" role="combobox" aria-expanded="false">
             <div class="dropdown" id="dropdown" hidden role="listbox"></div>
           </div>
-          <select id="source" aria-label="Data source">${Object.entries(SOURCES).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>
-          <select id="days" aria-label="Period">${PERIODS.map(([d, l]) => `<option value="${d}">${l}</option>`).join("")}</select>
-          <button class="btn primary" data-act="analyze">${I.chart}Analyze</button>
-          <button class="btn" data-act="scan">${I.scan}Scan all</button>
+          <button class="btn primary" data-act="scan">${I.scan}Scan all</button>
           <div class="target">${I.db}<span class="lbl">Database</span><code id="db-path">–</code><button class="linkbtn" data-act="goto-backup">backup</button></div>
         </div>
         <section class="stats" id="entity-stats" aria-label="Statistics"></section>
-        <section class="card" id="ov-card" hidden></section>
-        <section class="card" id="out-card" hidden></section>
         <section class="card" aria-labelledby="h-ent">
           <div class="card-head"><h2 id="h-ent">Entities</h2><span class="hint" id="ent-hint">numeric entities in the recorder</span>
             <div class="seg" id="ent-seg" role="group" aria-label="Filter">
@@ -415,14 +439,10 @@ class HaCleanupPanel extends HTMLElement {
           <div class="table-wrap"><table id="ent-table" style="min-width:860px"></table></div>
           <div class="pager" id="ent-pager"></div>
         </section>`;
-      this._resize.observe(v);
     }
-    this.$("source").value = this.S.source;
-    this.$("days").value = String(this.S.days);
     this.renderEntityStats();
     if (!this.S.entities) this.loadEntities();
     else this.renderEntityTable();
-    if (this.S.result) { this.renderOverview(); this.renderOutliers(); }
   }
 
   async loadEntities() {
@@ -431,7 +451,6 @@ class HaCleanupPanel extends HTMLElement {
       const r = await this.ws("entities");
       this.S.entities = r.entities;
       this.renderEntityStats(); this.renderEntityTable();
-      if (this.S.selected && this.S.entities.some((e) => e.entity_id === this.S.selected) && !this.S.result) this.analyze();
     } catch (e) { this.$("ent-table").innerHTML = `<tbody><tr><td class="empty msg-err">${esc(this.errMsg(e))}</td></tr></tbody>`; }
   }
 
@@ -536,21 +555,46 @@ class HaCleanupPanel extends HTMLElement {
     const e = this.S.entities?.find((x) => x.entity_id === entityId);
     if (e && !e.has_states && this.S.source === "states") { this.S.source = "statistics"; this.$("source").value = "statistics"; }
     this.closeDropdown();
-    this.$("picker").value = ""; this.S.q = ""; this.renderEntityTable();
+    if (this.$("picker")) { this.$("picker").value = ""; this.S.q = ""; this.renderEntityTable(); }
+    this.openAna();
     this.analyze();
+  }
+
+  // ---------------- analysis overlay
+  openAna() {
+    const e = this.S.entities?.find((x) => x.entity_id === this.S.selected);
+    this.$("ana-title").textContent = e?.name || this.S.selected;
+    this.$("ana-id").textContent = this.S.selected;
+    this.$("source").value = this.S.source; this.$("days").value = String(this.S.days);
+    if (!this.S.anaOpen) {
+      this.S.result = null; this.$("out-card").hidden = true;
+      this.$("ov-card").innerHTML = "";
+      this._lastFocus = this.shadowRoot.activeElement;
+    }
+    this.S.anaOpen = true; this.$("ana").hidden = false; this.$("ana").scrollTop = 0;
+    this.$("ana").querySelector('[data-act="close-ana"]').focus({ preventScroll: true });
+  }
+
+  closeAna() {
+    if (!this.S.anaOpen) return;
+    this.S.anaOpen = false; this.$("ana").hidden = true; this.S.result = null; this.S.sel.clear();
+    if (this.S.view === "entities") { this.renderEntityTable(); this.renderEntityStats(); }
+    try { this._lastFocus?.focus({ preventScroll: true }); } catch {}
   }
 
   // ---------------- analyze
   async analyze() {
     if (!this.S.selected) { this.toast("Choose an entity first (search field or table).", true); return; }
     this.S.loading = true; this.S.err = null;
-    const ov = this.$("ov-card"); ov.hidden = false;
+    const ov = this.$("ov-card");
     if (!this.S.result || this.S.result.entity_id !== this.S.selected) ov.innerHTML = `<div class="loading"><span class="spin"></span>Loading ${esc(this.S.selected)} …</div>`;
     else ov.querySelector(".chart")?.style.setProperty("opacity", ".5");
     try {
       const r = await this.ws("analyze", { entity_id: this.S.selected, source: this.S.source, days: this.S.days, method: this.S.method || undefined,
         threshold: this.S.threshold || undefined });
+      if (!this.S.anaOpen || r.entity_id !== this.S.selected) return;
       this.S.result = r; this.S.loading = false;
+      this.$("ana-title").textContent = r.name;
       // keep the scan table in sync for the states source
       if (this.S.source === "states" && this.S.days <= (this.S.info?.settings.scan_days || 3)) {
         this.S.scan.set(r.entity_id, { entity_id: r.entity_id, count: r.stats.count || 0, outliers: r.total_outliers, max_score: Math.max(0, ...r.outliers.map((o) => o.score)),
@@ -584,7 +628,7 @@ class HaCleanupPanel extends HTMLElement {
       ...(r.current != null ? [["Current state", isFinite(parseFloat(r.current)) ? this.num(parseFloat(r.current)) + this.unit(u) : esc(r.current)]] : []),
     ];
     ov.innerHTML = `
-      <div class="card-head"><div style="min-width:0"><h2>${esc(r.name)}</h2><div class="sub mono">${esc(r.entity_id)}</div></div>
+      <div class="card-head"><h2>Overview</h2>
         <span class="hint">${esc(SOURCES[r.source])} · ${kindLabel} · ${this.dt(r.start)} – ${this.dt(Math.min(r.end, Date.now() / 1000))}</span>
         <div class="seg" id="chart-seg" role="group" aria-label="Chart scale"><button data-cm="normal" aria-pressed="${this.S.chartMode === "normal"}">Normal range</button><button data-cm="full" aria-pressed="${this.S.chartMode === "full"}">Full range</button></div></div>
       <div class="ov">
@@ -1200,7 +1244,7 @@ class HaCleanupPanel extends HTMLElement {
     if (!btn) return;
     const ds = btn.dataset;
     if (ds.pick) { this.pick(ds.pick); return; }
-    if (ds.analyze) { if (this.S.view !== "entities") this.show("entities"); this.pick(ds.analyze); this.$("ov-card")?.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    if (ds.analyze) { this.pick(ds.analyze); return; }
     if (ds.f) { this.S.entityFilter = ds.f; this.S.entityPage = 1; this.renderEntityTable(); return; }
     if (ds.epage) { this.S.entityPage = +ds.epage; this.renderEntityTable(); return; }
     if (ds.opage) { this.S.outPage = +ds.opage; this.renderOutliers(); return; }
@@ -1235,11 +1279,8 @@ class HaCleanupPanel extends HTMLElement {
       return;
     }
     switch (ds.act) {
-      case "analyze": {
-        const q = this.$("picker").value.trim();
-        if (q) { const m = this.filteredEntities(); if (m.length) { this.pick(m[0].entity_id); return; } }
-        this.analyze(); break;
-      }
+      case "reanalyze": this.analyze(); break;
+      case "close-ana": this.closeAna(); break;
       case "scan": this.scanAll(); break;
       case "scan-stop": if (this.S.scanning) this.S.scanning.stop = true; break;
       case "purge-selected": this.purgeOrphans([...this.S.orphanSel]); break;
@@ -1332,6 +1373,7 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   onKey(e) {
+    if (e.key === "Escape" && this.S.anaOpen && e.target.id !== "picker" && !this.$("dlg").open) { e.preventDefault(); this.closeAna(); return; }
     if (e.target.id === "picker") {
       const dd = this.$("dropdown"), list = this.S.ddList || [];
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
