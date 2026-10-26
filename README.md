@@ -52,7 +52,7 @@ The event `ha_cleanup_scan_finished` carries `outliers`, `new`, `with_outliers`,
 ## Installation
 
 ### HACS (custom repository)
-1. HACS → ⋮ → *Custom repositories* → add `https://github.com/YOUR_GITHUB_USER/ha-cleanup`, type **Integration**.
+1. HACS → ⋮ → *Custom repositories* → add `https://github.com/BreitiDE/ha-cleanup`, type **Integration**.
 2. Install **Home Assistant Cleanup**, restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Home Assistant Cleanup*.
 4. **Cleanup** appears in the sidebar (admin users only).
