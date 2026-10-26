@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.1.0";
+const VERSION = "1.1.2";
 
 const CSS = `
 :host {
@@ -425,6 +425,7 @@ class HaCleanupPanel extends HTMLElement {
             <input type="search" id="picker" placeholder="Search entities: name, entity_id, unit …" autocomplete="off" spellcheck="false" aria-label="Search entity" role="combobox" aria-expanded="false">
             <div class="dropdown" id="dropdown" hidden role="listbox"></div>
           </div>
+          <select id="scan-days" aria-label="Scan period" title="Period checked by “Scan all”"></select>
           <button class="btn primary" data-act="scan">${I.scan}Scan all</button>
           <div class="target">${I.db}<span class="lbl">Database</span><code id="db-path">–</code><button class="linkbtn" data-act="goto-backup">backup</button></div>
         </div>
@@ -454,7 +455,22 @@ class HaCleanupPanel extends HTMLElement {
     } catch (e) { this.$("ent-table").innerHTML = `<tbody><tr><td class="empty msg-err">${esc(this.errMsg(e))}</td></tr></tbody>`; }
   }
 
+  renderScanDays() {
+    const sel = this.$("scan-days"), i = this.S.info; if (!sel) return;
+    const def = Number(i?.settings.scan_days ?? 3);
+    if (this.S.scanDays == null) this.S.scanDays = def;
+    const keep = i?.keep_days;
+    // States only exist for the recorder's keep_days, so longer periods add nothing.
+    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [30, "Last 30 days"]];
+    if (keep) { opts = opts.filter(([d]) => d < keep); opts.push([keep, `All kept (${keep} days)`]); }
+    if (!opts.some(([d]) => d === def)) opts.push([def, `Last ${this.num(def)} days`]);
+    if (this.S.scanDays !== def && !opts.some(([d]) => d === this.S.scanDays)) opts.push([this.S.scanDays, `Last ${this.num(this.S.scanDays)} days`]);
+    opts.sort((a, b) => a[0] - b[0]);
+    sel.innerHTML = opts.map(([d, l]) => `<option value="${d}" ${d === this.S.scanDays ? "selected" : ""}>${l}${d === def ? " (default)" : ""}</option>`).join("");
+  }
+
   renderEntityStats() {
+    this.renderScanDays();
     const box = this.$("entity-stats"); if (!box) return;
     const i = this.S.info, ents = this.S.entities || [];
     if (this.$("db-path")) this.$("db-path").textContent = i ? (i.db_path || i.engine) : "–";
@@ -941,7 +957,7 @@ class HaCleanupPanel extends HTMLElement {
     if (this.S.scanning) return;
     const ents = (this.S.entities || []).filter((e) => e.has_states);
     if (!ents.length) return;
-    const days = this.S.info?.settings.scan_days || 3;
+    const days = this.S.scanDays ?? this.S.info?.settings.scan_days ?? 3;
     this.S.scanning = { done: 0, total: ents.length, stop: false };
     this.S.scan = new Map(); this.S.lastScan = null;
     const prog = () => { const s = this.S.scanning; this.$("scan-progress").innerHTML = s ? `<div class="banner info" style="margin-bottom:10px"><span class="spin"></span>
@@ -1143,7 +1159,7 @@ class HaCleanupPanel extends HTMLElement {
     };
     try {
       await this.ws("settings/set", { settings });
-      this.S.method = settings.method; this.S.threshold = null; this.S.days = settings.days;
+      this.S.method = settings.method; this.S.threshold = null; this.S.days = settings.days; this.S.scanDays = null;
       this.toast("Settings saved"); this.loadInfo(); this.viewSettings();
     } catch (e) { this.toast(this.errMsg(e), true); }
   }
@@ -1344,6 +1360,7 @@ class HaCleanupPanel extends HTMLElement {
   onChange(e) {
     const t = e.target;
     if (t.id === "source") { this.S.source = t.value; try { localStorage.setItem("ha-cleanup-source", t.value); } catch {} this.S.sel.clear(); if (this.S.selected) this.analyze(); }
+    else if (t.id === "scan-days") { this.S.scanDays = parseFloat(t.value); }
     else if (t.id === "days") { this.S.days = parseFloat(t.value); if (this.S.selected) this.analyze(); }
     else if (t.id === "method") { this.S.method = t.value; this.S.threshold = null; this.analyze(); }
     else if (t.id === "threshold") { const v = parseFloat(t.value); this.S.threshold = isFinite(v) && v > 0 ? v : null; this.analyze(); }
