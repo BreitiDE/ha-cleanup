@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Home Assistant Cleanup",
+        "description": "Adds the Cleanup panel to the sidebar. It finds outliers in recorded sensor values and lets you fix or delete them, and it backs up and restores the recorder database."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Home Assistant Cleanup is already set up."
+    }
+  },
+  "services": {
+    "scan": {
+      "name": "Scan for outliers",
+      "description": "Checks all numeric entities in the recorder for outliers, stores the result for the Cleanup panel and sends a notification.",
+      "fields": {
+        "notify": {
+          "name": "Notify",
+          "description": "Send the result as a notification (settings of the Cleanup panel)."
+        },
+        "days": {
+          "name": "Period",
+          "description": "Days to check. Default: the period set for the automatic scan."
+        }
+      }
+    }
+  }
+}

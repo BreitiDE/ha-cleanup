@@ -1,0 +1,14 @@
+{
+  "domain": "ha_cleanup",
+  "name": "Home Assistant Cleanup",
+  "codeowners": ["@YOUR_GITHUB_USER"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http", "panel_custom", "recorder", "websocket_api"],
+  "documentation": "https://github.com/YOUR_GITHUB_USER/ha-cleanup",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/YOUR_GITHUB_USER/ha-cleanup/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "1.1.0"
+}
