@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 – 2026-10-26
+
+### Added
+- **Period selector next to “Scan all”** on the Entities page (last 24 hours, 3 days, 7 days, or everything the recorder keeps). It starts with the “Scan all” period from the settings; a choice applies until the page is reloaded or the settings are saved.
+
 ## 1.1.0 – 2026-10-26
 
 ### Added
