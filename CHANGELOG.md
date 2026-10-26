@@ -10,5 +10,9 @@
 - **Remove orphaned entities**: select entities that no longer exist and delete their history and statistics with the recorder's own functions (`recorder.purge_entities`, clear statistics). Optional safety backup first (default on).
 - Log entries for scans and removed entities.
 
+### Changed
+- **Analysis and editing open in an overlay** that can be closed (✕, Esc or a click outside). The Entities page keeps only search, statistics and the entity list, so nothing is left between the top area and the list. Data source and period are chosen in the overlay header.
+- The panel no longer opens the last analysed entity automatically.
+
 ## 1.0.0 – 2026-10-26
 - First version: outlier detection (spike detection, IQR, z-score, plausible range) for states, hourly and 5-minute statistics; replace, edit and delete values; counter correction; scan all; database backup and restore; settings; change log with undo.
