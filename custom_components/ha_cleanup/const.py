@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_cleanup"
 NAME = "Home Assistant Cleanup"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 PANEL_URL_PATH = "ha-cleanup"
 PANEL_TITLE = "Cleanup"

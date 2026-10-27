@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3 – 2026-10-27
+
+### Added
+- **Sortable entity list**: click the column header “Entity” (A→Z, again Z→A), “Values scanned” or “Outliers” (large → small, again small → large). A third click switches sorting off. Entities without a scan result always stay at the end. The sort order is remembered.
+
 ## 1.2.2 – 2026-10-27
 
 ### Added

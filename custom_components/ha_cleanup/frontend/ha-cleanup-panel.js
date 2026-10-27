@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.2";
+const VERSION = "1.2.3";
 
 const CSS = `
 :host {
@@ -135,6 +135,9 @@ input[type=checkbox] { accent-color:var(--accent); width:16px; height:16px; marg
 .chart { position:relative; flex:1; min-height:260px; user-select:none; }
 .ov-main { display:flex; flex-direction:column; min-width:0; }
 .chart svg { display:block; width:100%; height:100%; overflow:visible; }
+th button.sort { font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:0; cursor:pointer; white-space:nowrap; display:inline-flex; gap:4px; align-items:center; }
+th button.sort:hover { color:var(--ink); }
+th button.sort[aria-sort] { color:var(--accent-text); font-weight:600; }
 .chart .zsel { position:absolute; top:10px; bottom:24px; background:var(--accent-soft); border-left:1px solid var(--accent); border-right:1px solid var(--accent); pointer-events:none; z-index:4; }
 .chart.zoomable { cursor:crosshair; }
 .chart .tip { position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--border); box-shadow:var(--shadow);
@@ -264,6 +267,7 @@ class HaCleanupPanel extends HTMLElement {
         if (ui.fscan && Array.isArray(ui.fscan.results)) this.S.fscan = { ...ui.fscan, map: new Map(ui.fscan.results.map((x) => [x.entity_id, x])) };
         if (ui.ana && ui.ana.entity) this.S.anaRestore = ui.ana;
         if (ui.rg && typeof ui.rg === "object") this.S.rg = { ...this.S.rg, ...ui.rg };
+        if (ui.esort && ["name", "count", "outliers"].includes(ui.esort.key)) this.S.esort = ui.esort;
       }
     } catch {}
   }
@@ -407,7 +411,7 @@ class HaCleanupPanel extends HTMLElement {
         entityFilter: this.S.entityFilter, entityPage: this.S.entityPage, q: this.S.q, scanDays: this.S.scanDays, recent: this.S.recent,
         fscan: f ? { pattern: f.pattern, days: f.days, ts: f.ts, ids: f.ids, results: [...f.map.values()] } : null,
         ana: this.S.anaOpen && this.S.selected ? { entity: this.S.selected, source: this.S.source, days: this.S.days } : null,
-        rg: this.S.rg,
+        rg: this.S.rg, esort: this.S.esort,
       }));
     } catch {}
   }
@@ -576,7 +580,31 @@ class HaCleanupPanel extends HTMLElement {
     if (f === "outliers") list = list.filter((e) => (this.sc.get(e.entity_id)?.outliers || 0) > 0).sort((a, b) => this.sc.get(b.entity_id).max_score - this.sc.get(a.entity_id).max_score);
     if (f === "stats") list = list.filter((e) => e.statistic);
     if (f === "orphaned") list = list.filter((e) => e.orphaned);
+    const so = this.S.esort;
+    if (so) {
+      const dir = so.dir === "desc" ? -1 : 1;
+      if (so.key === "name") {
+        list = [...list].sort((a, b) => dir * String(a.name || a.entity_id).localeCompare(String(b.name || b.entity_id), this.lang, { sensitivity: "base" }) || a.entity_id.localeCompare(b.entity_id));
+      } else {
+        // Entities without a scan result always go to the end, whatever the direction.
+        const val = (e) => this.sc.get(e.entity_id)?.[so.key];
+        list = [...list].sort((a, b) => {
+          const va = val(a), vb = val(b);
+          if (va == null && vb == null) return a.entity_id.localeCompare(b.entity_id);
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          return dir * (va - vb) || a.entity_id.localeCompare(b.entity_id);
+        });
+      }
+    }
     return list;
+  }
+
+  sortHead(key, label, num) {
+    const so = this.S.esort, on = so && so.key === key;
+    const arrow = on ? (so.dir === "asc" ? (key === "name" ? "A→Z ↑" : "↑") : (key === "name" ? "Z→A ↓" : "↓")) : "";
+    const tip = key === "name" ? "Sort by name (A–Z / Z–A)" : "Sort (large → small / small → large)";
+    return `<th class="${num ? "num" : ""}"><button class="sort" data-esort="${key}" title="${tip}" ${on ? `aria-sort="${so.dir === "asc" ? "ascending" : "descending"}"` : ""}>${label}${arrow ? ` <span>${arrow}</span>` : ""}</button></th>`;
   }
 
   renderEntityTable() {
@@ -587,7 +615,7 @@ class HaCleanupPanel extends HTMLElement {
     const page = list.slice((this.S.entityPage - 1) * per, this.S.entityPage * per);
     const orphansOnPage = page.filter((e) => e.orphaned);
     const allOrph = orphansOnPage.length && orphansOnPage.every((e) => this.S.orphanSel.has(e.entity_id));
-    const head = `<thead><tr><th style="width:28px">${orphansOnPage.length ? `<input type="checkbox" id="orph-all" ${allOrph ? "checked" : ""} aria-label="Select orphaned entities on this page" title="Select orphaned entities">` : ""}</th><th>Status</th><th>Entity</th><th class="num">Current</th><th>Statistics</th><th class="num">Values scanned</th><th class="num">Outliers</th><th>Worst value</th><th class="num">Actions</th></tr></thead>`;
+    const head = `<thead><tr><th style="width:28px">${orphansOnPage.length ? `<input type="checkbox" id="orph-all" ${allOrph ? "checked" : ""} aria-label="Select orphaned entities on this page" title="Select orphaned entities">` : ""}</th><th>Status</th>${this.sortHead("name", "Entity")}<th class="num">Current</th><th>Statistics</th>${this.sortHead("count", "Values scanned", true)}${this.sortHead("outliers", "Outliers", true)}<th>Worst value</th><th class="num">Actions</th></tr></thead>`;
     if (!page.length) {
       const msg = this.S.entityFilter === "outliers" && !this.sc.size ? "No scan yet. “Scan all” checks every entity for outliers." : "No entities match.";
       tbl.innerHTML = head + `<tbody><tr><td colspan="9" class="empty">${msg}</td></tr></tbody>`;
@@ -1695,6 +1723,12 @@ class HaCleanupPanel extends HTMLElement {
       return;
     }
     if (ds.purge) { this.purgeOrphans([ds.purge]); return; }
+    if (ds.esort) {
+      // Click: first direction (A→Z for names, large → small for numbers), click again: reverse, third click: off.
+      const k = ds.esort, so = this.S.esort, first = k === "name" ? "asc" : "desc";
+      this.S.esort = !so || so.key !== k ? { key: k, dir: first } : so.dir === first ? { key: k, dir: first === "asc" ? "desc" : "asc" } : null;
+      this.S.entityPage = 1; this.renderEntityTable(); return;
+    }
     if (ds.rgf) { this.S.rg.filter = ds.rgf; this.S.rg.page = 1; this.renderRanges(); return; }
     if (ds.rgpage) { this.S.rg.page = +ds.rgpage; this.renderRanges(); return; }
     if (ds.redit) { this.rangeDialog(ds.redit); return; }
