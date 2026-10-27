@@ -27,12 +27,15 @@ A sidebar panel for Home Assistant that finds **outliers in recorded sensor valu
 - **Orphaned entities** (deleted, but history still in the database) can be removed with the recorder's own purge functions, with a safety backup first.
 - Snippets to prevent new outliers: Home Assistant `filter` sensor and ESPHome filters, prefilled from the analysis.
 
+**Ranges**
+- All plausible ranges on one page with status from the last scan (values outside / clean / not scanned), search, filter, paging (10, 25, 50, 100 or all) and an “Add range” dialog with a suggestion from the recorded values.
+
 **Backup**
 - Consistent online copy of the SQLite database (SQLite backup API, Home Assistant keeps running), gzip compression, `PRAGMA quick_check` on every copy, automatic rotation.
 - Restore is safe: the backup is unpacked and verified next to the database, and the file is swapped **while Home Assistant shuts down, after the recorder has closed the database**. A safety backup of the current database is taken first.
 - Download backups from the panel.
 
-**Settings** – detection defaults, automatic scan and notification, scan period, limits, backup folder, compression, rotation, restore behaviour, plausible ranges.
+**Settings** – detection defaults, automatic scan and notification, scan period, limits, backup folder, compression, rotation, restore behaviour.
 
 ## Automations
 

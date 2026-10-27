@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.1 – 2026-10-27
+
+### Added
+- **New page “Ranges”** (menu between Entities and Backup) for the plausible ranges:
+  - Statistics: number of ranges, ranges with min and max, values outside (last scan), clean, not scanned.
+  - List with status, entity, unit, minimum, maximum, current value and the worst value outside; actions: analyze, edit, remove (with undo).
+  - Search, filter (all / values outside / only one limit), page navigation and 10, 25, 50, 100 or all entries per page (remembered).
+  - “Add range” dialog: search an entity, see min / max / current value of the last 7 days and a suggested range. Growing counters get only a minimum as suggestion.
+- “Scan all” now also records how many values are outside each plausible range.
+
+### Changed
+- The plausible ranges table moved from Settings to the Ranges page. The fourth tile on Settings now shows the automatic scan.
+- The extra menu button in the Cleanup header was removed (the Home Assistant sidebar button stays).
+
 ## 1.2.0 – 2026-10-27
 
 ### Added
