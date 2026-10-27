@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.1.2";
+const VERSION = "1.2.0";
 
 const CSS = `
 :host {
@@ -184,6 +184,12 @@ dialog::backdrop { background:rgba(11,11,11,.45); }
 .toast.err { background:var(--critical); color:#fff; }
 .toast button { font:inherit; font-weight:600; background:none; border:0; color:var(--accent); cursor:pointer; padding:0; }
 footer { color:var(--muted); font-size:12px; display:flex; flex-wrap:wrap; gap:16px; }
+.fchip { display:inline-flex; gap:6px; align-items:center; font-size:12px; padding:3px 6px 3px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent-text); font-weight:600; }
+.fchip button { border:0; background:none; color:inherit; cursor:pointer; padding:0; display:inline-flex; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.chips button { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; padding:3px 8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--ink); cursor:pointer; }
+.chips button:hover { background:var(--hover); }
+.target.db { cursor:help; }
 /* analysis overlay */
 .overlay { position:fixed; inset:0; z-index:40; background:rgba(11,11,11,.55); overflow:auto; overscroll-behavior:contain; padding:24px 20px; }
 .sheet { max-width:1400px; margin:0 auto; background:var(--page); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }
@@ -204,6 +210,7 @@ const I = {
   search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
   scan: '<svg class="i" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
   chart: '<svg class="i" viewBox="0 0 24 24"><path d="M4 19h16M6 15l4-5 3 3 5-7"/></svg>',
+  filter: '<svg class="i" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></svg>',
   db: '<svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>',
   edit: '<svg class="i" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
   x: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -241,12 +248,21 @@ class HaCleanupPanel extends HTMLElement {
       view: "entities", info: null, entities: null, scan: new Map(), scanning: null, entityFilter: "all", entityPage: 1,
       selected: null, source: "states", days: 7, method: null, threshold: null, result: null, loading: false, err: null,
       sel: new Set(), sort: "time", outPage: 1, chartMode: "normal", q: "", ddIndex: 0,
-      settings: null, backups: null, log: null, logFilter: "all", lastScan: null, orphanSel: new Set(),
+      settings: null, backups: null, log: null, logFilter: "all", lastScan: null, orphanSel: new Set(), fscan: null, recent: [], anaRestore: null,
     };
     try {
       const v = localStorage.getItem("ha-cleanup-view"); if (v) this.S.view = v;
-      const e = localStorage.getItem("ha-cleanup-entity"); if (e) this.S.selected = e;
       const s = localStorage.getItem("ha-cleanup-source"); if (s && SOURCES[s]) this.S.source = s;
+      const ui = JSON.parse(localStorage.getItem("ha-cleanup-ui") || "null");
+      if (ui && typeof ui === "object") {
+        if (["all", "outliers", "stats", "orphaned"].includes(ui.entityFilter)) this.S.entityFilter = ui.entityFilter;
+        if (ui.entityPage > 0) this.S.entityPage = ui.entityPage;
+        if (typeof ui.q === "string") this.S.q = ui.q;
+        if (ui.scanDays > 0) this.S.scanDays = ui.scanDays;
+        if (Array.isArray(ui.recent)) this.S.recent = ui.recent.slice(0, 6);
+        if (ui.fscan && Array.isArray(ui.fscan.results)) this.S.fscan = { ...ui.fscan, map: new Map(ui.fscan.results.map((x) => [x.entity_id, x])) };
+        if (ui.ana && ui.ana.entity) this.S.anaRestore = ui.ana;
+      }
     } catch {}
   }
 
@@ -379,6 +395,35 @@ class HaCleanupPanel extends HTMLElement {
     if (view === "logs") this.viewLogs();
   }
 
+  /** Scan results currently shown: the filter scan if one is active, otherwise the last full scan. */
+  get sc() { return this.S.fscan ? this.S.fscan.map : this.S.scan; }
+
+  saveUI() {
+    try {
+      const f = this.S.fscan;
+      localStorage.setItem("ha-cleanup-ui", JSON.stringify({
+        entityFilter: this.S.entityFilter, entityPage: this.S.entityPage, q: this.S.q, scanDays: this.S.scanDays, recent: this.S.recent,
+        fscan: f ? { pattern: f.pattern, days: f.days, ts: f.ts, ids: f.ids, results: [...f.map.values()] } : null,
+        ana: this.S.anaOpen && this.S.selected ? { entity: this.S.selected, source: this.S.source, days: this.S.days } : null,
+      }));
+    } catch {}
+  }
+
+  /** Entities with recorded states that match "sensor.*, *victron*" (entity_id or name, case-insensitive). */
+  matchPattern(pattern) {
+    const terms = String(pattern || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+    if (!terms.length || !this.S.entities) return [];
+    const tests = terms.map((t) => {
+      if (t.includes("*") || t.includes("?")) {
+        const re = new RegExp("^" + t.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+        return (e) => re.test(e.entity_id) || re.test(String(e.name || "").toLowerCase());
+      }
+      const exact = this.S.entities.some((e) => e.entity_id === t);
+      return exact ? (e) => e.entity_id === t : (e) => e.entity_id.includes(t) || String(e.name || "").toLowerCase().includes(t);
+    });
+    return this.S.entities.filter((e) => e.has_states && tests.some((f) => f(e)));
+  }
+
   async loadLastScan() {
     try {
       const r = await this.ws("scan/last");
@@ -427,8 +472,10 @@ class HaCleanupPanel extends HTMLElement {
           </div>
           <select id="scan-days" aria-label="Scan period" title="Period checked by “Scan all”"></select>
           <button class="btn primary" data-act="scan">${I.scan}Scan all</button>
-          <div class="target">${I.db}<span class="lbl">Database</span><code id="db-path">–</code><button class="linkbtn" data-act="goto-backup">backup</button></div>
+          <button class="btn" data-act="scan-filter">${I.filter}Scan filter …</button>
+          <div class="target db" id="db-box">${I.db}<code id="db-path">–</code></div>
         </div>
+        <div id="fscan-bar"></div>
         <section class="stats" id="entity-stats" aria-label="Statistics"></section>
         <section class="card" aria-labelledby="h-ent">
           <div class="card-head"><h2 id="h-ent">Entities</h2><span class="hint" id="ent-hint">numeric entities in the recorder</span>
@@ -441,6 +488,7 @@ class HaCleanupPanel extends HTMLElement {
           <div class="pager" id="ent-pager"></div>
         </section>`;
     }
+    if (this.$("picker").value !== this.S.q) this.$("picker").value = this.S.q;
     this.renderEntityStats();
     if (!this.S.entities) this.loadEntities();
     else this.renderEntityTable();
@@ -452,6 +500,12 @@ class HaCleanupPanel extends HTMLElement {
       const r = await this.ws("entities");
       this.S.entities = r.entities;
       this.renderEntityStats(); this.renderEntityTable();
+      const a = this.S.anaRestore; this.S.anaRestore = null;
+      if (a && this.S.entities.some((e) => e.entity_id === a.entity)) {
+        if (SOURCES[a.source]) this.S.source = a.source;
+        if (a.days > 0) this.S.days = a.days;
+        this.S.selected = a.entity; this.openAna(); this.analyze();
+      }
     } catch (e) { this.$("ent-table").innerHTML = `<tbody><tr><td class="empty msg-err">${esc(this.errMsg(e))}</td></tr></tbody>`; }
   }
 
@@ -473,17 +527,25 @@ class HaCleanupPanel extends HTMLElement {
     this.renderScanDays();
     const box = this.$("entity-stats"); if (!box) return;
     const i = this.S.info, ents = this.S.entities || [];
-    if (this.$("db-path")) this.$("db-path").textContent = i ? (i.db_path || i.engine) : "–";
+    if (this.$("db-path")) {
+      const full = i ? (i.db_path || i.engine) : "–";
+      this.$("db-path").textContent = i?.db_path ? i.db_path.split("/").pop() : full;
+      this.$("db-box").title = i?.db_path ? `Database: ${i.db_path}` : `Database: ${full}`;
+    }
+    const fs = this.S.fscan;
+    this.$("fscan-bar").innerHTML = fs ? `<div class="banner info" style="padding:8px 14px"><span>Showing scan result for filter</span>
+      <span class="fchip"><span class="mono">${esc(fs.pattern)}</span> · ${this.int(fs.ids.length)} entit${fs.ids.length === 1 ? "y" : "ies"} · last ${this.num(fs.days)} days · ${this.ago(fs.ts)}<button data-act="fscan-clear" title="Back to the full scan" aria-label="Back to the full scan">${I.x}</button></span>
+      <span class="end"><button class="btn small" data-act="fscan-rerun">${I.restore}Run again</button></span></div>` : "";
     const withStats = ents.filter((e) => e.statistic);
     const counters = withStats.filter((e) => e.statistic.has_sum).length;
     const orphaned = ents.filter((e) => e.orphaned).length;
-    const scanned = [...this.S.scan.values()];
+    const scanned = [...this.sc.values()];
     const withOut = scanned.filter((r) => r.outliers > 0);
     const totalOut = withOut.reduce((a, r) => a + r.outliers, 0);
     const tiles = [
       ["Numeric entities", this.S.entities ? this.int(ents.length) : "…", this.S.entities ? `${this.int(ents.filter((e) => e.exists).length)} active · ${this.int(ents.filter((e) => e.has_states).length)} with history` : "loading"],
       ["Long-term statistics", this.S.entities ? this.int(withStats.length) : "…", `${this.int(withStats.length - counters)} measured · ${this.int(counters)} counter${counters === 1 ? "" : "s"}`],
-      ["Outliers found", scanned.length ? this.int(totalOut) : "–", scanned.length ? `in ${this.int(withOut.length)} entities · ${this.S.lastScan ? this.ago(this.S.lastScan.ts) : "just now"}` : (i?.next_scan ? `next scan ${this.shortDt(i.next_scan)}` : "run “Scan all”"), totalOut ? "bad" : ""],
+      ["Outliers found", scanned.length ? this.int(totalOut) : "–", scanned.length ? (fs ? `in ${this.int(withOut.length)} of ${this.int(scanned.length)} filtered entities` : `in ${this.int(withOut.length)} entities · ${this.S.lastScan ? this.ago(this.S.lastScan.ts) : "just now"}`) : (i?.next_scan ? `next scan ${this.shortDt(i.next_scan)}` : "run “Scan all”"), totalOut ? "bad" : ""],
       ["Orphaned", this.S.entities ? this.int(orphaned) : "…", "entity no longer exists"],
       ["Database", i?.db_size ? this.bytes(i.db_size) : (i ? (i.engine === "sqlite" ? "–" : i.engine) : "…"), i ? `states kept ${i.keep_days} days` : ""],
       ["Changes", i ? this.int(i.changes_30d) : "…", i ? `${this.int(i.changed_values_30d)} values · last 30 days` : ""],
@@ -494,12 +556,13 @@ class HaCleanupPanel extends HTMLElement {
   filteredEntities() {
     const q = this.S.q.trim().toLowerCase();
     let list = this.S.entities || [];
+    if (this.S.fscan) { const ids = new Set(this.S.fscan.ids); list = list.filter((e) => ids.has(e.entity_id)); }
     if (q) {
       const parts = q.split(/\s+/);
       list = list.filter((e) => { const h = `${e.entity_id} ${e.name} ${e.unit || ""} ${e.device_class || ""}`.toLowerCase(); return parts.every((p) => h.includes(p)); });
     }
     const f = this.S.entityFilter;
-    if (f === "outliers") list = list.filter((e) => (this.S.scan.get(e.entity_id)?.outliers || 0) > 0).sort((a, b) => this.S.scan.get(b.entity_id).max_score - this.S.scan.get(a.entity_id).max_score);
+    if (f === "outliers") list = list.filter((e) => (this.sc.get(e.entity_id)?.outliers || 0) > 0).sort((a, b) => this.sc.get(b.entity_id).max_score - this.sc.get(a.entity_id).max_score);
     if (f === "stats") list = list.filter((e) => e.statistic);
     if (f === "orphaned") list = list.filter((e) => e.orphaned);
     return list;
@@ -515,11 +578,11 @@ class HaCleanupPanel extends HTMLElement {
     const allOrph = orphansOnPage.length && orphansOnPage.every((e) => this.S.orphanSel.has(e.entity_id));
     const head = `<thead><tr><th style="width:28px">${orphansOnPage.length ? `<input type="checkbox" id="orph-all" ${allOrph ? "checked" : ""} aria-label="Select orphaned entities on this page" title="Select orphaned entities">` : ""}</th><th>Status</th><th>Entity</th><th class="num">Current</th><th>Statistics</th><th class="num">Values scanned</th><th class="num">Outliers</th><th>Worst value</th><th class="num">Actions</th></tr></thead>`;
     if (!page.length) {
-      const msg = this.S.entityFilter === "outliers" && !this.S.scan.size ? "No scan yet. “Scan all” checks every entity for outliers." : "No entities match.";
+      const msg = this.S.entityFilter === "outliers" && !this.sc.size ? "No scan yet. “Scan all” checks every entity for outliers." : "No entities match.";
       tbl.innerHTML = head + `<tbody><tr><td colspan="9" class="empty">${msg}</td></tr></tbody>`;
     } else {
       tbl.innerHTML = head + "<tbody>" + page.map((e) => {
-        const sc = this.S.scan.get(e.entity_id);
+        const sc = this.sc.get(e.entity_id);
         const status = e.orphaned ? `<span class="pill neutral">Orphaned</span>` : !e.exists ? `<span class="pill neutral">${e.external ? "External" : "Inactive"}</span>`
           : sc ? (sc.outliers ? `<span class="pill error">${this.int(sc.outliers)} outlier${sc.outliers === 1 ? "" : "s"}</span>` : `<span class="pill ok">Clean</span>`) : `<span class="pill neutral">Not scanned</span>`;
         const st = e.statistic ? `<span class="badge">${e.statistic.has_sum ? "counter (sum)" : "measurement"}</span>` : `<span class="dimmed">–</span>`;
@@ -536,7 +599,8 @@ class HaCleanupPanel extends HTMLElement {
           <td class="num"><span class="row-actions">${e.orphaned ? `<button class="icon-btn danger" data-purge="${esc(e.entity_id)}" title="Remove from database" aria-label="Remove from database">${I.trash}</button>` : ""}<button class="btn small" data-analyze="${esc(e.entity_id)}">${I.chart}Analyze</button></span></td></tr>`;
       }).join("") + "</tbody>";
     }
-    this.$("ent-hint").textContent = `${this.int(list.length)} of ${this.int(this.S.entities.length)} numeric entities` + (this.S.q ? ` matching “${this.S.q}”` : "");
+    this.$("ent-hint").textContent = `${this.int(list.length)} of ${this.int(this.S.entities.length)} numeric entities` + (this.S.fscan ? ` · filter ${this.S.fscan.pattern}` : "") + (this.S.q ? ` matching “${this.S.q}”` : "");
+    this.saveUI();
     const nOrph = this.S.orphanSel.size, allOrphans = this.S.entities.filter((e) => e.orphaned).length;
     this.$("orph-bar").innerHTML = nOrph ? `<div class="selbar"><b>${this.int(nOrph)} orphaned selected</b>
       <button class="btn small danger" data-act="purge-selected">${I.trash}Remove from database</button>
@@ -558,7 +622,7 @@ class HaCleanupPanel extends HTMLElement {
     dd.innerHTML = list.length ? list.map((e, i) => `<button type="button" role="option" data-pick="${esc(e.entity_id)}" class="${i === this.S.ddIndex ? "active" : ""}">
         <span class="nm"><div class="t">${esc(e.name)}</div><div class="sub mono">${esc(e.entity_id)}</div></span>
         ${e.unit ? `<span class="badge">${esc(e.unit)}</span>` : ""}${e.statistic ? `<span class="badge">${e.statistic.has_sum ? "Σ" : "LTS"}</span>` : ""}
-        ${this.S.scan.get(e.entity_id)?.outliers ? `<span class="pill error">${this.S.scan.get(e.entity_id).outliers}</span>` : ""}</button>`).join("")
+        ${this.sc.get(e.entity_id)?.outliers ? `<span class="pill error">${this.sc.get(e.entity_id).outliers}</span>` : ""}</button>`).join("")
       + (this.filteredEntities().length > 60 ? `<div class="more">Type more to narrow down …</div>` : "")
       : `<div class="more">No numeric entity matches.</div>`;
     dd.hidden = false; this.$("picker").setAttribute("aria-expanded", "true");
@@ -567,7 +631,6 @@ class HaCleanupPanel extends HTMLElement {
 
   pick(entityId) {
     this.S.selected = entityId; this.S.sel.clear(); this.S.outPage = 1;
-    try { localStorage.setItem("ha-cleanup-entity", entityId); } catch {}
     const e = this.S.entities?.find((x) => x.entity_id === entityId);
     if (e && !e.has_states && this.S.source === "states") { this.S.source = "statistics"; this.$("source").value = "statistics"; }
     this.closeDropdown();
@@ -587,13 +650,13 @@ class HaCleanupPanel extends HTMLElement {
       this.$("ov-card").innerHTML = "";
       this._lastFocus = this.shadowRoot.activeElement;
     }
-    this.S.anaOpen = true; this.$("ana").hidden = false; this.$("ana").scrollTop = 0;
+    this.S.anaOpen = true; this.$("ana").hidden = false; this.$("ana").scrollTop = 0; this.saveUI();
     this.$("ana").querySelector('[data-act="close-ana"]').focus({ preventScroll: true });
   }
 
   closeAna() {
     if (!this.S.anaOpen) return;
-    this.S.anaOpen = false; this.$("ana").hidden = true; this.S.result = null; this.S.sel.clear();
+    this.S.anaOpen = false; this.$("ana").hidden = true; this.S.result = null; this.S.sel.clear(); this.saveUI();
     if (this.S.view === "entities") { this.renderEntityTable(); this.renderEntityStats(); }
     try { this._lastFocus?.focus({ preventScroll: true }); } catch {}
   }
@@ -613,7 +676,8 @@ class HaCleanupPanel extends HTMLElement {
       this.$("ana-title").textContent = r.name;
       // keep the scan table in sync for the states source
       if (this.S.source === "states" && this.S.days <= (this.S.info?.settings.scan_days || 3)) {
-        this.S.scan.set(r.entity_id, { entity_id: r.entity_id, count: r.stats.count || 0, outliers: r.total_outliers, max_score: Math.max(0, ...r.outliers.map((o) => o.score)),
+        const target = this.S.fscan && this.S.fscan.map.has(r.entity_id) ? this.S.fscan.map : this.S.scan;
+        target.set(r.entity_id, { entity_id: r.entity_id, count: r.stats.count || 0, outliers: r.total_outliers, max_score: Math.max(0, ...r.outliers.map((o) => o.score)),
           worst_value: r.outliers.length ? r.outliers.reduce((a, b) => (b.score > a.score ? b : a)).value : null,
           worst_ts: r.outliers.length ? r.outliers.reduce((a, b) => (b.score > a.score ? b : a)).ts : null });
       }
@@ -954,34 +1018,96 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   async scanAll() {
-    if (this.S.scanning) return;
     const ents = (this.S.entities || []).filter((e) => e.has_states);
-    if (!ents.length) return;
+    if (!ents.length || this.S.scanning) return;
     const days = this.S.scanDays ?? this.S.info?.settings.scan_days ?? 3;
-    this.S.scanning = { done: 0, total: ents.length, stop: false };
+    this.S.fscan = null;
     this.S.scan = new Map(); this.S.lastScan = null;
+    const map = await this.runScan(ents, days, this.S.scan);
+    if (!map) return;
+    const found = [...map.values()].filter((x) => x.outliers).length;
+    this.toast(`Scan finished: ${found} entit${found === 1 ? "y" : "ies"} with outliers`);
+    if (!this.S.scanStopped) {
+      const results = [...map.values()].map((x) => { const e = this.S.entities.find((y) => y.entity_id === x.entity_id); return { ...x, unit: e?.unit ?? null, name: e?.name ?? null }; });
+      try { const r = await this.ws("scan/save", { days, results }); this.S.lastScan = r.scan; this.loadInfo(); } catch {}
+    }
+    if (found) { this.S.entityFilter = "outliers"; this.S.entityPage = 1; }
+    this.renderEntityStats(); this.renderEntityTable();
+  }
+
+  /** Scan only the entities matching a pattern. The result is kept in the panel, the last full scan stays untouched. */
+  async scanFiltered(pattern, days) {
+    const ents = this.matchPattern(pattern);
+    if (!ents.length || this.S.scanning) return;
+    pattern = pattern.split(",").map((t) => t.trim()).filter(Boolean).join(", ");
+    this.S.recent = [pattern, ...this.S.recent.filter((r) => r !== pattern)].slice(0, 6);
+    this.S.fscan = { pattern, days, ts: Date.now() / 1000, ids: ents.map((e) => e.entity_id), map: new Map() };
+    this.S.entityPage = 1;
+    const map = await this.runScan(ents, days, this.S.fscan.map);
+    if (!map) return;
+    this.S.fscan.ts = Date.now() / 1000;
+    const found = [...map.values()].filter((x) => x.outliers);
+    this.S.entityFilter = found.length ? "outliers" : "all";
+    this.renderEntityStats(); this.renderEntityTable();
+    if (ents.length === 1) { this.pick(ents[0].entity_id); return; }
+    this.toast(`Filter scan: ${found.length} of ${ents.length} entit${ents.length === 1 ? "y" : "ies"} with outliers`);
+  }
+
+  async runScan(ents, days, map) {
+    this.S.scanning = { done: 0, total: ents.length, stop: false }; this.S.scanStopped = false;
     const prog = () => { const s = this.S.scanning; this.$("scan-progress").innerHTML = s ? `<div class="banner info" style="margin-bottom:10px"><span class="spin"></span>
       <span>Scanning the last ${this.num(days)} days: ${this.int(s.done)} of ${this.int(s.total)} entities</span><div class="bar" style="flex:1"><div style="width:${(s.done / s.total) * 100}%"></div></div>
       <button class="btn small" data-act="scan-stop">Stop</button></div>` : ""; };
-    prog();
+    prog(); this.renderEntityStats(); this.renderEntityTable();
     const chunk = 12;
     try {
       for (let i = 0; i < ents.length && !this.S.scanning.stop; i += chunk) {
         const ids = ents.slice(i, i + chunk).map((e) => e.entity_id);
         const r = await this.ws("scan", { entity_ids: ids, days });
-        r.results.forEach((x) => this.S.scan.set(x.entity_id, x));
+        r.results.forEach((x) => map.set(x.entity_id, x));
         this.S.scanning.done = Math.min(ents.length, i + chunk); prog();
         if (i % (chunk * 5) === 0) { this.renderEntityStats(); this.renderEntityTable(); }
       }
-      const found = [...this.S.scan.values()].filter((x) => x.outliers).length;
-      this.toast(`Scan finished: ${found} entit${found === 1 ? "y" : "ies"} with outliers`);
-      if (!this.S.scanning.stop) {
-        const results = [...this.S.scan.values()].map((x) => { const e = this.S.entities.find((y) => y.entity_id === x.entity_id); return { ...x, unit: e?.unit ?? null, name: e?.name ?? null }; });
-        try { const r = await this.ws("scan/save", { days, results }); this.S.lastScan = r.scan; this.loadInfo(); } catch {}
-      }
-      if (found) { this.S.entityFilter = "outliers"; this.S.entityPage = 1; }
-    } catch (e) { this.toast(this.errMsg(e), true); }
-    this.S.scanning = null; prog(); this.renderEntityStats(); this.renderEntityTable();
+    } catch (e) { this.toast(this.errMsg(e), true); this.S.scanning = null; prog(); return null; }
+    this.S.scanStopped = this.S.scanning.stop;
+    this.S.scanning = null; prog();
+    return map;
+  }
+
+  filterDialog(preset) {
+    const def = Number(this.S.info?.settings.scan_days ?? 3), keep = this.S.info?.keep_days;
+    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [30, "Last 30 days"]];
+    if (keep) { opts = opts.filter(([d]) => d < keep); opts.push([keep, `All kept (${keep} days)`]); }
+    if (!opts.some(([d]) => d === def)) opts.push([def, `Last ${this.num(def)} days`]);
+    opts.sort((a, b) => a[0] - b[0]);
+    const cur = this.S.fscan?.days ?? this.S.scanDays ?? def;
+    const value = preset ?? this.S.fscan?.pattern ?? "";
+    const quick = ["sensor.*", "*temperature*", "*power*", "*energy*", "*humidity*"];
+    this.openDialog("Scan filter", `
+      <label class="f">Entities<input type="text" name="pattern" class="mono" spellcheck="false" autocomplete="off" value="${esc(value)}" placeholder="sensor.*, *victron*, sensor.wohnzimmer_temperatur">
+        <span class="hint">One entity, or a pattern with <code>*</code> as wildcard. Several separated by comma. Matches entity_id and name.</span></label>
+      <div class="chips"><span class="hint">Quick:</span>${quick.map((q) => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+      ${this.S.recent.length ? `<div class="chips"><span class="hint">Recent:</span>${this.S.recent.map((q) => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}
+      <label class="f">Period<select name="days">${opts.map(([d, l]) => `<option value="${d}" ${d === cur ? "selected" : ""}>${l}${d === def ? " (default)" : ""}</option>`).join("")}</select></label>
+      <div class="box" id="f-preview"></div>`, "Scan", async (form) => {
+      const pattern = form.pattern.value.trim();
+      if (!this.matchPattern(pattern).length) throw new Error("No entity with recorded states matches this filter.");
+      const days = parseFloat(form.days.value);
+      setTimeout(() => this.scanFiltered(pattern, days), 0);
+    });
+    const d = this.$("dlg"), form = d.querySelector("form"), inp = form.pattern, btn = form.querySelector('[type="submit"]');
+    const upd = () => {
+      const m = this.matchPattern(inp.value), all = (this.S.entities || []).length;
+      btn.disabled = !m.length;
+      btn.textContent = m.length ? `Scan ${this.int(m.length)} entit${m.length === 1 ? "y" : "ies"}` : "Scan";
+      this.$("f-preview").innerHTML = !inp.value.trim() ? `<span class="hint">Type a filter to see the matching entities (${this.int(all)} numeric entities in total).</span>`
+        : m.length ? `<b style="font-size:13px">${this.int(m.length)} entit${m.length === 1 ? "y matches" : "ies match"}</b>${m.length === 1 ? ` <span class="hint">· opens the analysis right after the scan</span>` : ""}
+          <div class="sub mono" style="margin-top:6px;line-height:1.7">${m.slice(0, 6).map((e) => esc(e.entity_id)).join("<br>")}${m.length > 6 ? `<br>… and ${this.int(m.length - 6)} more` : ""}</div>`
+        : `<span class="msg-err" style="font-size:13px">No entity with recorded states matches.</span>`;
+    };
+    inp.addEventListener("input", upd);
+    d.querySelectorAll("[data-q]").forEach((b) => (b.onclick = () => { inp.value = b.dataset.q; upd(); inp.focus(); }));
+    upd();
   }
 
   // ===================================================================== BACKUP
@@ -1262,6 +1388,7 @@ class HaCleanupPanel extends HTMLElement {
     if (ds.pick) { this.pick(ds.pick); return; }
     if (ds.analyze) { this.pick(ds.analyze); return; }
     if (ds.f) { this.S.entityFilter = ds.f; this.S.entityPage = 1; this.renderEntityTable(); return; }
+    if (ds.q) return;
     if (ds.epage) { this.S.entityPage = +ds.epage; this.renderEntityTable(); return; }
     if (ds.opage) { this.S.outPage = +ds.opage; this.renderOutliers(); return; }
     if (ds.sort) { this.S.sort = ds.sort; this.S.outPage = 1; this.renderOutliers(); return; }
@@ -1305,7 +1432,7 @@ class HaCleanupPanel extends HTMLElement {
       case "scan-server": {
         btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = `<span class="spin"></span>Scanning …`;
         try { const r = await this.ws("scan/run", { notify: true }); const sm = r.summary;
-          this.S.lastScan = r.scan; this.S.scan = new Map(r.scan.results.map((x) => [x.entity_id, x]));
+          this.S.lastScan = r.scan; this.S.scan = new Map(r.scan.results.map((x) => [x.entity_id, x])); this.S.fscan = null;
           this.toast(`Scan finished: ${sm.outliers} outlier${sm.outliers === 1 ? "" : "s"} in ${sm.with_outliers} entit${sm.with_outliers === 1 ? "y" : "ies"}`); }
         catch (err) { this.toast(this.errMsg(err), true); }
         btn.innerHTML = old; btn.disabled = false; this.loadInfo(); if (this.S.view === "settings") setTimeout(() => this.viewSettings(), 300);
@@ -1315,7 +1442,9 @@ class HaCleanupPanel extends HTMLElement {
         try { const r = await this.ws("notify/test"); this.toast(r.sent ? `Sent to ${r.targets.join(", ")}` : "Nothing sent – enable a notification target first", !r.sent); }
         catch (err) { this.toast(this.errMsg(err), true); }
         break;
-      case "goto-backup": this.show("backup"); break;
+      case "scan-filter": this.filterDialog(); break;
+      case "fscan-clear": this.S.fscan = null; this.S.entityPage = 1; this.renderEntityStats(); this.renderEntityTable(); break;
+      case "fscan-rerun": if (this.S.fscan) this.scanFiltered(this.S.fscan.pattern, this.S.fscan.days); break;
       case "goto-settings": this.show("settings"); break;
       case "save-limits": {
         const mn = this.$("lim-min").value, mx = this.$("lim-max").value;
@@ -1359,9 +1488,9 @@ class HaCleanupPanel extends HTMLElement {
 
   onChange(e) {
     const t = e.target;
-    if (t.id === "source") { this.S.source = t.value; try { localStorage.setItem("ha-cleanup-source", t.value); } catch {} this.S.sel.clear(); if (this.S.selected) this.analyze(); }
-    else if (t.id === "scan-days") { this.S.scanDays = parseFloat(t.value); }
-    else if (t.id === "days") { this.S.days = parseFloat(t.value); if (this.S.selected) this.analyze(); }
+    if (t.id === "source") { this.S.source = t.value; try { localStorage.setItem("ha-cleanup-source", t.value); } catch {} this.saveUI(); this.S.sel.clear(); if (this.S.selected) this.analyze(); }
+    else if (t.id === "scan-days") { this.S.scanDays = parseFloat(t.value); this.saveUI(); }
+    else if (t.id === "days") { this.S.days = parseFloat(t.value); this.saveUI(); if (this.S.selected) this.analyze(); }
     else if (t.id === "method") { this.S.method = t.value; this.S.threshold = null; this.analyze(); }
     else if (t.id === "threshold") { const v = parseFloat(t.value); this.S.threshold = isFinite(v) && v > 0 ? v : null; this.analyze(); }
     else if (t.id === "out-all") {
