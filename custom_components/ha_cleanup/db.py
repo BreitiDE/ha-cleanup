@@ -394,6 +394,14 @@ def scan(
         )
         worst = max(hits, key=lambda h: h["score"]) if hits else None
         new = sum(1 for h in hits if since is not None and times[h["index"]] > since)
+        # Values outside the plausible range (shown on the Ranges page).
+        lo, hi = lim.get("min"), lim.get("max")
+        outside = [
+            (abs(v - (lo if lo is not None and v < lo else hi)), v, t)
+            for v, t in zip(values, times)
+            if (lo is not None and v < lo) or (hi is not None and v > hi)
+        ]
+        out_worst = max(outside) if outside else None
         out.append(
             {
                 "entity_id": entity_id,
@@ -405,6 +413,10 @@ def scan(
                 "worst_ts": times[worst["index"]] if worst else None,
                 "min": min(values) if values else None,
                 "max": max(values) if values else None,
+                "outside": len(outside) if lim else None,
+                "outside_value": out_worst[1] if out_worst else None,
+                "outside_ts": out_worst[2] if out_worst else None,
+                "limits": {"min": lo, "max": hi} if lim else None,
             }
         )
     return out

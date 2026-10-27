@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.0";
+const VERSION = "1.2.1";
 
 const CSS = `
 :host {
@@ -32,8 +32,6 @@ svg.i { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2;
 header { background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:20; }
 header .wrap { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding-top:10px; padding-bottom:10px; }
 .brand { display:flex; align-items:center; gap:10px; font-weight:650; font-size:18px; white-space:nowrap; }
-.menu-btn { display:none; }
-:host([narrow]) .menu-btn { display:inline-flex; }
 nav { display:flex; flex-wrap:wrap; gap:4px; }
 nav button { font:inherit; border:0; background:transparent; color:var(--ink-2); padding:8px 12px; border-radius:8px; cursor:pointer; }
 nav button[aria-current="page"] { background:var(--accent-soft); color:var(--accent-text); font-weight:600; }
@@ -206,7 +204,8 @@ footer { color:var(--muted); font-size:12px; display:flex; flex-wrap:wrap; gap:1
 
 const I = {
   logo: `<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#ce6c00"/><path d="M7 22l6-6 4 4 8-9" fill="none" stroke="#0b0b0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="17" cy="9" r="2.4" fill="#0b0b0b"/></svg>`,
-  menu: '<svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+  first: '<svg class="i" viewBox="0 0 24 24"><path d="M17 6l-6 6 6 6M8 6v12"/></svg>',
+  last: '<svg class="i" viewBox="0 0 24 24"><path d="M7 6l6 6-6 6M16 6v12"/></svg>',
   search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
   scan: '<svg class="i" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
   chart: '<svg class="i" viewBox="0 0 24 24"><path d="M4 19h16M6 15l4-5 3 3 5-7"/></svg>',
@@ -248,7 +247,7 @@ class HaCleanupPanel extends HTMLElement {
       view: "entities", info: null, entities: null, scan: new Map(), scanning: null, entityFilter: "all", entityPage: 1,
       selected: null, source: "states", days: 7, method: null, threshold: null, result: null, loading: false, err: null,
       sel: new Set(), sort: "time", outPage: 1, chartMode: "normal", q: "", ddIndex: 0,
-      settings: null, backups: null, log: null, logFilter: "all", lastScan: null, orphanSel: new Set(), fscan: null, recent: [], anaRestore: null,
+      settings: null, backups: null, log: null, logFilter: "all", lastScan: null, orphanSel: new Set(), fscan: null, recent: [], anaRestore: null, rg: { q: "", filter: "all", page: 1, per: 25 },
     };
     try {
       const v = localStorage.getItem("ha-cleanup-view"); if (v) this.S.view = v;
@@ -262,6 +261,7 @@ class HaCleanupPanel extends HTMLElement {
         if (Array.isArray(ui.recent)) this.S.recent = ui.recent.slice(0, 6);
         if (ui.fscan && Array.isArray(ui.fscan.results)) this.S.fscan = { ...ui.fscan, map: new Map(ui.fscan.results.map((x) => [x.entity_id, x])) };
         if (ui.ana && ui.ana.entity) this.S.anaRestore = ui.ana;
+        if (ui.rg && typeof ui.rg === "object") this.S.rg = { ...this.S.rg, ...ui.rg };
       }
     } catch {}
   }
@@ -329,10 +329,9 @@ class HaCleanupPanel extends HTMLElement {
   _init() {
     this.shadowRoot.innerHTML = `<style>${CSS}</style>
       <header><div class="wrap">
-        <button class="icon-btn menu-btn" id="menu" aria-label="Open sidebar">${I.menu}</button>
         <div class="brand">${I.logo}Cleanup</div>
         <nav aria-label="Main menu">
-          <button data-view="entities">Entities</button><button data-view="backup">Backup</button>
+          <button data-view="entities">Entities</button><button data-view="ranges">Ranges</button><button data-view="backup">Backup</button>
           <button data-view="settings">Settings</button><button data-view="logs">Logs</button>
         </nav>
         <div class="who">
@@ -344,6 +343,7 @@ class HaCleanupPanel extends HTMLElement {
         <div id="banners"></div>
         <section class="view" id="view-entities"></section>
         <section class="view" id="view-backup" hidden></section>
+        <section class="view" id="view-ranges" hidden></section>
         <section class="view" id="view-settings" hidden></section>
         <section class="view" id="view-logs" hidden></section>
         <footer><span>Home Assistant Cleanup ${VERSION}</span><span id="foot"></span></footer>
@@ -368,7 +368,6 @@ class HaCleanupPanel extends HTMLElement {
       <dialog id="dlg"></dialog>`;
     const root = this.shadowRoot;
     root.querySelector("nav").addEventListener("click", (e) => { const b = e.target.closest("button[data-view]"); if (b) this.show(b.dataset.view); });
-    this.$("menu").addEventListener("click", () => this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true })));
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("change", (e) => this.onChange(e));
     root.addEventListener("input", (e) => this.onInput(e));
@@ -384,7 +383,7 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   show(view) {
-    if (!["entities", "backup", "settings", "logs"].includes(view)) view = "entities";
+    if (!["entities", "ranges", "backup", "settings", "logs"].includes(view)) view = "entities";
     this.S.view = view;
     try { localStorage.setItem("ha-cleanup-view", view); } catch {}
     this.shadowRoot.querySelectorAll("nav button").forEach((b) => b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
@@ -392,6 +391,7 @@ class HaCleanupPanel extends HTMLElement {
     if (view === "entities") this.viewEntities();
     if (view === "backup") this.viewBackup();
     if (view === "settings") this.viewSettings();
+    if (view === "ranges") this.viewRanges();
     if (view === "logs") this.viewLogs();
   }
 
@@ -405,6 +405,7 @@ class HaCleanupPanel extends HTMLElement {
         entityFilter: this.S.entityFilter, entityPage: this.S.entityPage, q: this.S.q, scanDays: this.S.scanDays, recent: this.S.recent,
         fscan: f ? { pattern: f.pattern, days: f.days, ts: f.ts, ids: f.ids, results: [...f.map.values()] } : null,
         ana: this.S.anaOpen && this.S.selected ? { entity: this.S.selected, source: this.S.source, days: this.S.days } : null,
+        rg: this.S.rg,
       }));
     } catch {}
   }
@@ -446,6 +447,7 @@ class HaCleanupPanel extends HTMLElement {
       if (this.S.view === "entities") this.renderEntityStats();
       if (this.S.view === "backup") this.renderBackupStats();
       if (this.S.view === "logs") this.renderLogs();
+      if (this.S.view === "ranges") this.renderRanges();
     } catch (e) {
       this.$("status-dot").className = "dot bad";
       this.$("status-text").textContent = "not available";
@@ -495,18 +497,25 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   async loadEntities() {
-    this.$("ent-table").innerHTML = `<tbody><tr><td><div class="loading"><span class="spin"></span>Reading the recorder …</div></td></tr></tbody>`;
+    if (this._loadingEntities) return this._loadingEntities;
+    this._loadingEntities = this._loadEntities().finally(() => { this._loadingEntities = null; });
+    return this._loadingEntities;
+  }
+
+  async _loadEntities() {
+    if (this.$("ent-table")) this.$("ent-table").innerHTML = `<tbody><tr><td><div class="loading"><span class="spin"></span>Reading the recorder …</div></td></tr></tbody>`;
     try {
       const r = await this.ws("entities");
       this.S.entities = r.entities;
-      this.renderEntityStats(); this.renderEntityTable();
+      if (this.$("ent-table")) { this.renderEntityStats(); this.renderEntityTable(); }
       const a = this.S.anaRestore; this.S.anaRestore = null;
       if (a && this.S.entities.some((e) => e.entity_id === a.entity)) {
         if (SOURCES[a.source]) this.S.source = a.source;
         if (a.days > 0) this.S.days = a.days;
         this.S.selected = a.entity; this.openAna(); this.analyze();
       }
-    } catch (e) { this.$("ent-table").innerHTML = `<tbody><tr><td class="empty msg-err">${esc(this.errMsg(e))}</td></tr></tbody>`; }
+      if (this.S.view === "ranges") this.renderRanges();
+    } catch (e) { if (this.$("ent-table")) this.$("ent-table").innerHTML = `<tbody><tr><td class="empty msg-err">${esc(this.errMsg(e))}</td></tr></tbody>`; }
   }
 
   renderScanDays() {
@@ -1208,19 +1217,213 @@ class HaCleanupPanel extends HTMLElement {
     } catch (e) { this.toast(this.errMsg(e), true); }
   }
 
+
+  // ===================================================================== RANGES
+  rangeRows() {
+    const limits = this.S.info?.settings.limits || {};
+    const ents = new Map((this.S.entities || []).map((e) => [e.entity_id, e]));
+    return Object.entries(limits).map(([id, l]) => {
+      const e = ents.get(id), sc = this.S.scan.get(id);
+      const lo = l.min ?? null, hi = l.max ?? null;
+      let status = "none", outside = null, worst = null, worstTs = null;
+      if (sc) {
+        const same = sc.limits && sc.limits.min === lo && sc.limits.max === hi;
+        if (same && sc.outside != null) { outside = sc.outside; worst = sc.outside_value; worstTs = sc.outside_ts; }
+        else if (sc.min != null) {
+          const below = lo != null && sc.min < lo, above = hi != null && sc.max > hi;
+          outside = below || above ? -1 : 0; worst = below ? sc.min : above ? sc.max : null;
+        }
+        status = outside == null ? "none" : outside ? "out" : "ok";
+      }
+      if (!e && this.S.entities) status = "missing";
+      const counter = !!(e?.statistic?.has_sum || String(e?.state_class || "").startsWith("total"));
+      return { id, name: e?.name || id, unit: e?.unit || "", state: e?.state, lo, hi, status, outside, worst, worstTs, exists: !!e, counter };
+    });
+  }
+
+  viewRanges() {
+    const v = this.$("view-ranges");
+    if (!v.dataset.ready) {
+      v.dataset.ready = "1";
+      v.innerHTML = `
+        <div class="actions">
+          <div class="picker" style="max-width:460px">${I.search}<input type="search" id="rg-q" placeholder="Search ranges: name, entity_id, unit …" autocomplete="off" spellcheck="false" aria-label="Search ranges"></div>
+          <button class="btn primary" data-act="rg-add">${I.plus}Add range</button>
+        </div>
+        <section class="stats" id="rg-stats" aria-label="Statistics"></section>
+        <section class="card" aria-labelledby="h-rg">
+          <div class="card-head"><h2 id="h-rg">Plausible ranges</h2><span class="hint" id="rg-hint">values outside are always reported as outliers</span>
+            <div class="seg" id="rg-seg" role="group" aria-label="Filter">
+              <button data-rgf="all">All</button><button data-rgf="out">Values outside</button><button data-rgf="one">Only one limit</button>
+            </div></div>
+          <div class="table-wrap"><table id="rg-table" style="min-width:900px"></table></div>
+          <div class="pager" id="rg-pager"></div>
+        </section>`;
+    }
+    this.$("rg-q").value = this.S.rg.q;
+    if (!this.S.entities) this.loadEntities();
+    if (!this.S.lastScan) this.loadLastScan();
+    this.renderRanges();
+  }
+
+  renderRanges() {
+    const tbl = this.$("rg-table"); if (!tbl || this.S.view !== "ranges") return;
+    const all = this.rangeRows(), rg = this.S.rg, nEnt = (this.S.entities || []).length;
+    const both = all.filter((r) => r.lo != null && r.hi != null).length;
+    const out = all.filter((r) => r.status === "out"), ok = all.filter((r) => r.status === "ok").length, none = all.filter((r) => r.status === "none").length;
+    const exist = all.filter((r) => r.exists).length, missing = all.filter((r) => r.status === "missing").length;
+    const outVals = out.reduce((a, r) => a + (r.outside > 0 ? r.outside : 0), 0);
+    const ls = this.S.lastScan;
+    const tiles = [
+      ["Plausible ranges", this.int(all.length), this.S.entities ? `for ${this.int(exist)} of ${this.int(nEnt)} numeric entities${missing ? ` · ${this.int(missing)} entity not found` : ""}` : "entities with min / max"],
+      ["Min and max", this.int(both), `${this.int(all.length - both)} with only one limit`],
+      ["Values outside", out.length ? this.int(outVals || out.length) : "0", out.length ? `in ${this.int(out.length)} entit${out.length === 1 ? "y" : "ies"}${ls ? " · last scan " + this.ago(ls.ts) : ""}` : (ls ? `last scan ${this.ago(ls.ts)}` : "no scan yet"), out.length ? "bad" : ""],
+      ["Clean", this.int(ok), "no value outside the range"],
+      ["Not scanned", this.int(none), "run “Scan all” on Entities"],
+    ];
+    this.$("rg-stats").innerHTML = tiles.map(([l, v, s, c]) => `<div class="card kpi ${c || ""}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${esc(s)}</div></div>`).join("");
+    const q = rg.q.trim().toLowerCase();
+    let list = all;
+    if (q) { const parts = q.split(/\s+/); list = list.filter((r) => parts.every((p) => `${r.id} ${r.name} ${r.unit}`.toLowerCase().includes(p))); }
+    if (rg.filter === "out") list = list.filter((r) => r.status === "out");
+    if (rg.filter === "one") list = list.filter((r) => r.lo == null || r.hi == null);
+    const rank = { out: 0, ok: 1, none: 2, missing: 3 };
+    list.sort((a, b) => rank[a.status] - rank[b.status] || (b.outside || 0) - (a.outside || 0) || a.name.localeCompare(b.name));
+    const per = rg.per || list.length || 1, pages = Math.max(1, Math.ceil(list.length / per));
+    rg.page = Math.min(Math.max(1, rg.page), pages);
+    const page = list.slice((rg.page - 1) * per, rg.page * per);
+    const head = `<thead><tr><th>Status</th><th>Entity</th><th>Unit</th><th class="num">Minimum</th><th class="num">Maximum</th><th class="num">Current</th><th>Worst value outside</th><th class="num">Actions</th></tr></thead>`;
+    if (!page.length) {
+      tbl.innerHTML = head + `<tbody><tr><td colspan="8" class="empty">${all.length ? "No range matches." : "No plausible ranges yet. “Add range” sets a minimum and maximum for an entity."}</td></tr></tbody>`;
+    } else {
+      tbl.innerHTML = head + "<tbody>" + page.map((r) => {
+        const pill = r.status === "out" ? (r.outside > 0 ? `<span class="pill error">${this.int(r.outside)} outside</span>`
+            : `<span class="pill error" title="The range was changed after the last scan. Run a scan for the exact number.">outside</span>`)
+          : r.status === "ok" ? `<span class="pill ok">Clean</span>` : r.status === "missing" ? `<span class="pill neutral">Not found</span>` : `<span class="pill neutral">Not scanned</span>`;
+        const cur = r.state == null ? "–" : isFinite(parseFloat(r.state)) ? this.num(parseFloat(r.state)) + this.unit(r.unit) : esc(r.state);
+        return `<tr><td class="nw">${pill}</td>
+          <td><div class="t">${esc(r.name)}</div><div class="sub mono">${esc(r.id)}</div></td>
+          <td>${esc(r.unit) || `<span class="dimmed">–</span>`}</td>
+          <td class="num">${r.lo != null ? this.num(r.lo) : `<span class="dimmed">–</span>`}</td>
+          <td class="num">${r.hi != null ? this.num(r.hi) : `<span class="dimmed">–</span>`}</td>
+          <td class="num">${cur}</td>
+          <td class="nw">${r.worst != null ? `${this.num(r.worst)}${this.unit(r.unit)}${r.worstTs ? ` <span class="sub">${this.shortDt(r.worstTs)}</span>` : ""}` : `<span class="dimmed">–</span>`}</td>
+          <td class="num"><span class="row-actions">
+            <button class="icon-btn" data-analyze="${esc(r.id)}" title="Analyze" aria-label="Analyze">${I.chart}</button>
+            <button class="icon-btn" data-redit="${esc(r.id)}" title="Edit range" aria-label="Edit range">${I.edit}</button>
+            <button class="icon-btn danger" data-rdel="${esc(r.id)}" title="Remove range" aria-label="Remove range">${I.x}</button></span></td></tr>`;
+      }).join("") + "</tbody>";
+    }
+    this.$("rg-hint").textContent = `${this.int(list.length)} of ${this.int(all.length)} · values outside are always reported as outliers · entities with values outside first`;
+    this.$("rg-seg").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.rgf === rg.filter));
+    const from = list.length ? (rg.page - 1) * per + 1 : 0, to = Math.min(list.length, rg.page * per);
+    this.$("rg-pager").innerHTML = `<span>${this.int(from)}–${this.int(to)} of ${this.int(list.length)}</span>
+      <span class="end"><label class="inline" style="gap:6px">per page <select id="rg-per" style="width:auto;padding:5px 8px;font-size:13px">${[10, 25, 50, 100, 0].map((n) => `<option value="${n}" ${n === rg.per ? "selected" : ""}>${n || "All"}</option>`).join("")}</select></label>
+      <button class="icon-btn" data-rgpage="1" ${rg.page <= 1 ? "disabled" : ""} aria-label="First page">${I.first}</button>
+      <button class="icon-btn" data-rgpage="${rg.page - 1}" ${rg.page <= 1 ? "disabled" : ""} aria-label="Previous page">${I.prev}</button>
+      <span style="padding:0 6px">Page ${rg.page} of ${pages}</span>
+      <button class="icon-btn" data-rgpage="${rg.page + 1}" ${rg.page >= pages ? "disabled" : ""} aria-label="Next page">${I.next}</button>
+      <button class="icon-btn" data-rgpage="${pages}" ${rg.page >= pages ? "disabled" : ""} aria-label="Last page">${I.last}</button></span>`;
+    this.saveUI();
+  }
+
+  async setRange(entityId, lo, hi) {
+    const r = await this.ws("limits", { entity_id: entityId, min: lo, max: hi });
+    this.patchLimits(entityId, r.limits || null);
+    this.renderRanges();
+    return r;
+  }
+
+  suggestRange(st, unit) {
+    if (!st || !st.count) return null;
+    const span = st.max - st.min, mag = Math.max(Math.abs(st.max), Math.abs(st.min));
+    const margin = Math.max(span * 0.5, mag * 0.1, 1e-6);
+    const step = niceStep(margin);
+    let lo = Math.floor((st.min - margin) / step) * step, hi = Math.ceil((st.max + margin) / step) * step;
+    if (st.min >= 0) lo = Math.max(0, lo);
+    if (unit === "%") { lo = Math.max(0, lo); hi = Math.min(100, hi); }
+    const fix = (x) => Number(x.toPrecision(6));
+    return { lo: fix(lo), hi: fix(hi) };
+  }
+
+  rangeDialog(entityId) {
+    const editing = !!entityId;
+    const cur = editing ? (this.S.info?.settings.limits || {})[entityId] || {} : {};
+    const limits = this.S.info?.settings.limits || {};
+    this.openDialog(editing ? "Edit plausible range" : "Add plausible range", `
+      ${editing ? "" : `<div style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--ink-2)">Entity
+        <div class="picker" style="max-width:none;flex:none">${I.search}<input type="search" name="ent" placeholder="Search: name or entity_id" autocomplete="off" spellcheck="false"></div>
+        <div class="dir-list" id="rg-pick" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px" hidden></div></div>`}
+      <div class="box" id="rg-info" style="font-size:13px" ${editing ? "" : "hidden"}></div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:12px">
+        <label class="f"><span id="rg-lo-l">Minimum</span><input type="number" name="lo" step="any" placeholder="none" value="${cur.min ?? ""}"></label>
+        <label class="f"><span id="rg-hi-l">Maximum</span><input type="number" name="hi" step="any" placeholder="none" value="${cur.max ?? ""}"></label>
+      </div>
+      <p class="hint" style="margin:0" id="rg-sug">Leave a field empty for no limit.</p>`, "Save range", async (form) => {
+      const id = editing ? entityId : form.dataset.entity;
+      if (!id) throw new Error("Choose an entity first.");
+      const num = (x) => (x.trim() === "" ? null : parseFloat(x));
+      const lo = num(form.lo.value), hi = num(form.hi.value);
+      if ((lo != null && !isFinite(lo)) || (hi != null && !isFinite(hi))) throw new Error("Please enter numbers.");
+      if (lo == null && hi == null) throw new Error("Set a minimum, a maximum or both.");
+      if (lo != null && hi != null && lo > hi) throw new Error("Minimum must be lower than maximum.");
+      await this.setRange(id, lo, hi);
+      this.toast(editing ? "Range saved" : "Range added");
+    });
+    const form = this.$("dlg").querySelector("form");
+    const choose = async (id) => {
+      form.dataset.entity = id;
+      const e = this.S.entities?.find((x) => x.entity_id === id);
+      const u = e?.unit ? ` (${e.unit})` : "";
+      this.$("rg-lo-l").textContent = "Minimum" + u; this.$("rg-hi-l").textContent = "Maximum" + u;
+      const info = this.$("rg-info"); info.hidden = false;
+      info.innerHTML = `<b>${esc(e?.name || id)}</b> <span class="sub mono">${esc(id)}</span>${limits[id] && !editing ? `<div class="msg-err" style="margin-top:4px">This entity already has a range – saving replaces it.</div>` : ""}<div class="hint" style="margin-top:4px"><span class="spin" style="width:10px;height:10px;vertical-align:-1px"></span> reading the last 7 days …</div>`;
+      if (!editing && limits[id]) { form.lo.value = limits[id].min ?? ""; form.hi.value = limits[id].max ?? ""; }
+      try {
+        const src = e && !e.has_states && e.statistic ? "statistics" : "states";
+        const r = await this.ws("analyze", { entity_id: id, source: src, days: 7, method: "range" });
+        if (form.dataset.entity !== id) return;
+        const st = r.stats, mm = r.stats_minmax || {};
+        const stat = st.count ? { count: st.count, min: mm.min ?? st.min, max: mm.max ?? st.max } : null;
+        info.querySelector(".hint").textContent = stat ? `last 7 days: min ${this.num(stat.min)}${e?.unit ? " " + e.unit : ""} · max ${this.num(stat.max)}${e?.unit ? " " + e.unit : ""}${r.current != null ? " · current " + r.current + (e?.unit ? " " + e.unit : "") : ""}` : "no numeric values in the last 7 days";
+        const counter = !!(e?.statistic?.has_sum || String(e?.state_class || "").startsWith("total"));
+        let sg = this.suggestRange(st.count ? { count: st.count, min: st.p01 ?? stat.min, max: st.p99 ?? stat.max } : null, e?.unit);
+        // A meter reading keeps growing: a maximum would soon be wrong, so only suggest a lower limit.
+        if (sg && counter) sg = { lo: 0, hi: "" };
+        this.$("rg-sug").innerHTML = sg ? `Leave a field empty for no limit. Suggestion from the recorded values: <button type="button" class="linkbtn" id="rg-use">${counter ? "minimum 0, no maximum" : `${this.num(sg.lo)} … ${this.num(sg.hi)}${e?.unit ? " " + esc(e.unit) : ""}`}</button>${counter ? `<br>This is a growing counter. Jumps of a counter are found by spike detection on the hourly statistics, a maximum does not help.` : ""}` : "Leave a field empty for no limit.";
+        const use = this.$("rg-use"); if (use) use.onclick = () => { form.lo.value = sg.lo; form.hi.value = sg.hi; };
+        if (!editing && !limits[id] && sg && form.lo.value === "" && form.hi.value === "") { form.lo.value = sg.lo; form.hi.value = sg.hi; }
+      } catch (err) { info.querySelector(".hint").textContent = this.errMsg(err); }
+    };
+    if (editing) { choose(entityId); return; }
+    const inp = form.ent, box = this.$("rg-pick");
+    const list = () => {
+      const q = inp.value.trim().toLowerCase();
+      if (!q) { box.hidden = true; return; }
+      const parts = q.split(/\s+/);
+      const m = (this.S.entities || []).filter((e) => parts.every((p) => `${e.entity_id} ${e.name} ${e.unit || ""}`.toLowerCase().includes(p))).slice(0, 30);
+      box.hidden = false;
+      box.innerHTML = m.length ? m.map((e) => `<button type="button" data-pickr="${esc(e.entity_id)}" style="display:flex;gap:10px;align-items:center"><span style="flex:1;min-width:0"><span class="t">${esc(e.name)}</span> <span class="sub mono">${esc(e.entity_id)}</span></span>${e.unit ? `<span class="badge">${esc(e.unit)}</span>` : ""}${limits[e.entity_id] ? `<span class="badge acc">range</span>` : ""}</button>`).join("")
+        : `<div class="empty" style="padding:12px">No numeric entity matches.</div>`;
+      box.querySelectorAll("[data-pickr]").forEach((b) => (b.onclick = () => { const e = this.S.entities.find((x) => x.entity_id === b.dataset.pickr); inp.value = e.entity_id; box.hidden = true; choose(e.entity_id); form.lo.focus(); }));
+    };
+    inp.addEventListener("input", () => { delete form.dataset.entity; this.$("rg-info").hidden = true; list(); });
+    inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); box.querySelector("[data-pickr]")?.click(); } });
+    if (!this.S.entities) this.loadEntities().then(list);
+  }
+
   // =================================================================== SETTINGS
   async viewSettings() {
     const v = this.$("view-settings");
     let data;
     try { data = await this.ws("settings/get"); } catch (e) { v.innerHTML = `<div class="banner err">${esc(this.errMsg(e))}</div>`; return; }
     const s = data.settings, i = this.S.info;
-    const limits = Object.entries(s.limits || {});
     v.innerHTML = `
       <section class="stats" aria-label="Statistics">
         ${[["Database engine", i ? (i.engine === "sqlite" ? "SQLite" : i.engine) : "…", i?.db_path || ""],
            ["History kept", i ? `${i.keep_days} days` : "…", "recorder purge_keep_days"],
            ["States in DB", i ? "≈ " + this.int(i.counts.states) : "…", `${i ? this.int(i.counts.statistics) : "…"} hourly · ${i ? this.int(i.counts.statistics_short_term) : "…"} 5-min statistics`],
-           ["Plausible ranges", this.int(limits.length), "entities with min / max"]].map(([l, x, sub]) => `<div class="card kpi"><div class="l">${l}</div><div class="v">${esc(x)}</div><div class="s">${esc(sub)}</div></div>`).join("")}
+           ["Automatic scan", i ? ({ off: "Off", daily: "Daily", weekly: "Weekly" }[i.settings.auto_scan] || "Off") : "…", i?.next_scan ? `next ${this.dt(i.next_scan)}` : "not scheduled"]].map(([l, x, sub]) => `<div class="card kpi"><div class="l">${l}</div><div class="v">${esc(x)}</div><div class="s">${esc(sub)}</div></div>`).join("")}
       </section>
       <form id="settings-form" style="display:flex;flex-direction:column;gap:16px">
       <section class="card"><h2 style="margin-bottom:12px">Outlier detection</h2>
@@ -1263,13 +1466,7 @@ class HaCleanupPanel extends HTMLElement {
           <label class="check"><input type="checkbox" name="auto_restart_after_restore" ${s.auto_restart_after_restore ? "checked" : ""}><span>Restart Home Assistant right after preparing a restore</span></label>
         </div></section>
       <div class="actions"><button class="btn primary" type="submit">Save settings</button><button class="btn" type="button" data-act="settings-reset">Reset to defaults</button></div>
-      </form>
-      <section class="card"><div class="card-head"><h2>Plausible ranges</h2><span class="hint">set on the Entities page, in the overview of an entity</span></div>
-        <div class="table-wrap"><table><thead><tr><th>Entity</th><th class="num">Minimum</th><th class="num">Maximum</th><th class="num">Actions</th></tr></thead><tbody>
-        ${limits.length ? limits.map(([e, l]) => `<tr><td class="mono">${esc(e)}</td><td class="num">${this.num(l.min)}</td><td class="num">${this.num(l.max)}</td>
-          <td class="num"><span class="row-actions"><button class="icon-btn" data-analyze="${esc(e)}" title="Open" aria-label="Open">${I.chart}</button>
-          <button class="icon-btn danger" data-limdel="${esc(e)}" title="Remove" aria-label="Remove">${I.x}</button></span></td></tr>`).join("")
-        : `<tr><td colspan="4" class="empty">No ranges set yet.</td></tr>`}</tbody></table></div></section>`;
+      </form>`;
   }
 
   async saveSettings(form) {
@@ -1416,11 +1613,18 @@ class HaCleanupPanel extends HTMLElement {
       return;
     }
     if (ds.purge) { this.purgeOrphans([ds.purge]); return; }
-    if (ds.limdel) {
-      try { await this.ws("limits", { entity_id: ds.limdel, min: null, max: null }); this.toast("Range removed"); this.patchLimits(ds.limdel, null); this.viewSettings(); }
+    if (ds.rgf) { this.S.rg.filter = ds.rgf; this.S.rg.page = 1; this.renderRanges(); return; }
+    if (ds.rgpage) { this.S.rg.page = +ds.rgpage; this.renderRanges(); return; }
+    if (ds.redit) { this.rangeDialog(ds.redit); return; }
+    if (ds.rdel) {
+      const id = ds.rdel, old = { ...((this.S.info?.settings.limits || {})[id] || {}) };
+      try { await this.setRange(id, null, null);
+        this.toast("Range removed", false, { label: "Undo", run: () => this.setRange(id, old.min ?? null, old.max ?? null).then(() => this.toast("Range restored")).catch((e) => this.toast(this.errMsg(e), true)) }); }
       catch (err) { this.toast(this.errMsg(err), true); }
       return;
     }
+    if (ds.pickr) return;
+
     switch (ds.act) {
       case "reanalyze": this.analyze(); break;
       case "close-ana": this.closeAna(); break;
@@ -1443,6 +1647,7 @@ class HaCleanupPanel extends HTMLElement {
         catch (err) { this.toast(this.errMsg(err), true); }
         break;
       case "scan-filter": this.filterDialog(); break;
+      case "rg-add": this.rangeDialog(); break;
       case "fscan-clear": this.S.fscan = null; this.S.entityPage = 1; this.renderEntityStats(); this.renderEntityTable(); break;
       case "fscan-rerun": if (this.S.fscan) this.scanFiltered(this.S.fscan.pattern, this.S.fscan.days); break;
       case "goto-settings": this.show("settings"); break;
@@ -1489,6 +1694,7 @@ class HaCleanupPanel extends HTMLElement {
   onChange(e) {
     const t = e.target;
     if (t.id === "source") { this.S.source = t.value; try { localStorage.setItem("ha-cleanup-source", t.value); } catch {} this.saveUI(); this.S.sel.clear(); if (this.S.selected) this.analyze(); }
+    else if (t.id === "rg-per") { this.S.rg.per = parseInt(t.value); this.S.rg.page = 1; this.renderRanges(); }
     else if (t.id === "scan-days") { this.S.scanDays = parseFloat(t.value); this.saveUI(); }
     else if (t.id === "days") { this.S.days = parseFloat(t.value); this.saveUI(); if (this.S.selected) this.analyze(); }
     else if (t.id === "method") { this.S.method = t.value; this.S.threshold = null; this.analyze(); }
@@ -1512,6 +1718,7 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   onInput(e) {
+    if (e.target.id === "rg-q") { this.S.rg.q = e.target.value; this.S.rg.page = 1; clearTimeout(this._rqT); this._rqT = setTimeout(() => this.renderRanges(), 150); return; }
     if (e.target.id === "picker") {
       this.S.q = e.target.value; this.S.ddIndex = 0; this.S.entityPage = 1;
       this.openDropdown(); clearTimeout(this._qT); this._qT = setTimeout(() => this.renderEntityTable(), 150);
