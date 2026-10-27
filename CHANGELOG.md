@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 – 2026-10-27
+
+### Added
+- **Scan filter …** next to “Scan all”: scan a single entity or a pattern such as `sensor.*`, `*victron*` or several separated by comma (matches entity_id and name). Shows the matching entities while typing, has quick patterns and the recently used filters, and its own period (default from the settings).
+  - The result is shown in the entity list with a banner (filter, number of entities, period); ✕ returns to the last full scan, “Run again” repeats the filter scan.
+  - The last full scan and the “only new outliers” notifications are not changed by a filter scan.
+  - If the filter matches exactly one entity, its analysis opens right after the scan.
+- **The view is kept** when you leave the panel and come back, also after a reload: list filter, page, search text, scan period, the active filter scan and an open analysis overlay (entity, data source, period). Stored per browser.
+
+### Changed
+- The database box shows only the icon and the file name; the full path appears on mouse-over. The “backup” link was removed – use the Backup menu.
+- “Scan all” is unchanged.
+
 ## 1.1.2 – 2026-10-26
 
 ### Added
