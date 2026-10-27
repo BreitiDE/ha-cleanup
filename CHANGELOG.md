@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.2 – 2026-10-27
+
+### Added
+- **Zoom into the time axis** of the analysis chart: drag across the chart with the mouse to zoom into a time range. The zoomed range is loaded again, so every single value is shown instead of the downsampled overview. Drag again to zoom further.
+  - “Reset zoom” in the Overview header (or a double-click into the chart) shows the whole period again.
+  - While zoomed, the outlier list shows only the outliers in the zoomed range; fixing or deleting values keeps the zoom.
+  - The zoom is reset when the entity, data source or period changes or the overlay is closed.
+- “Normal range” / “Full range” (value axis) are unchanged.
+
 ## 1.2.1 – 2026-10-27
 
 ### Added

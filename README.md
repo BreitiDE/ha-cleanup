@@ -9,7 +9,7 @@ A sidebar panel for Home Assistant that finds **outliers in recorded sensor valu
 **Entities**
 - Lists every entity with numeric values in the recorder (active, disabled, orphaned and long-term-statistics-only).
 - Search by name, entity id, unit or device class; choose from the dropdown or the table.
-- Overview per entity in an overlay that closes with ✕, Esc or a click outside: chart with outliers marked, min / max / mean / median / standard deviation, resolution and current state.
+- Overview per entity in an overlay that closes with ✕, Esc or a click outside: chart with outliers marked (drag across it to zoom into a time range, “Reset zoom” to go back), min / max / mean / median / standard deviation, resolution and current state.
 - Three data sources:
   - **States** – the raw history (kept for `purge_keep_days`, default 10 days).
   - **Hourly statistics** – long-term statistics, kept forever. This is what the energy dashboard and statistics graphs use.

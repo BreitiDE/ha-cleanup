@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.1";
+const VERSION = "1.2.2";
 
 const CSS = `
 :host {
@@ -135,6 +135,8 @@ input[type=checkbox] { accent-color:var(--accent); width:16px; height:16px; marg
 .chart { position:relative; flex:1; min-height:260px; user-select:none; }
 .ov-main { display:flex; flex-direction:column; min-width:0; }
 .chart svg { display:block; width:100%; height:100%; overflow:visible; }
+.chart .zsel { position:absolute; top:10px; bottom:24px; background:var(--accent-soft); border-left:1px solid var(--accent); border-right:1px solid var(--accent); pointer-events:none; z-index:4; }
+.chart.zoomable { cursor:crosshair; }
 .chart .tip { position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--border); box-shadow:var(--shadow);
   border-radius:8px; padding:6px 9px; font-size:12px; white-space:nowrap; z-index:5; }
 .chart .tip b { font-variant-numeric:tabular-nums; }
@@ -639,7 +641,7 @@ class HaCleanupPanel extends HTMLElement {
   closeDropdown() { const dd = this.$("dropdown"); if (dd && !dd.hidden) { dd.hidden = true; this.$("picker").setAttribute("aria-expanded", "false"); } }
 
   pick(entityId) {
-    this.S.selected = entityId; this.S.sel.clear(); this.S.outPage = 1;
+    this.S.selected = entityId; this.S.sel.clear(); this.S.outPage = 1; this.S.zoom = null;
     const e = this.S.entities?.find((x) => x.entity_id === entityId);
     if (e && !e.has_states && this.S.source === "states") { this.S.source = "statistics"; this.$("source").value = "statistics"; }
     this.closeDropdown();
@@ -655,7 +657,7 @@ class HaCleanupPanel extends HTMLElement {
     this.$("ana-id").textContent = this.S.selected;
     this.$("source").value = this.S.source; this.$("days").value = String(this.S.days);
     if (!this.S.anaOpen) {
-      this.S.result = null; this.$("out-card").hidden = true;
+      this.S.result = null; this.S.zoom = null; this.$("out-card").hidden = true;
       this.$("ov-card").innerHTML = "";
       this._lastFocus = this.shadowRoot.activeElement;
     }
@@ -665,7 +667,7 @@ class HaCleanupPanel extends HTMLElement {
 
   closeAna() {
     if (!this.S.anaOpen) return;
-    this.S.anaOpen = false; this.$("ana").hidden = true; this.S.result = null; this.S.sel.clear(); this.saveUI();
+    this.S.anaOpen = false; this.$("ana").hidden = true; this.S.result = null; this.S.zoom = null; this.S.sel.clear(); this.saveUI();
     if (this.S.view === "entities") { this.renderEntityTable(); this.renderEntityStats(); }
     try { this._lastFocus?.focus({ preventScroll: true }); } catch {}
   }
@@ -683,6 +685,7 @@ class HaCleanupPanel extends HTMLElement {
       if (!this.S.anaOpen || r.entity_id !== this.S.selected) return;
       this.S.result = r; this.S.loading = false;
       this.$("ana-title").textContent = r.name;
+      if (this.S.zoom && this.S.zoom.key !== this.zoomKey()) this.S.zoom = null;
       // keep the scan table in sync for the states source
       if (this.S.source === "states" && this.S.days <= (this.S.info?.settings.scan_days || 3)) {
         const target = this.S.fscan && this.S.fscan.map.has(r.entity_id) ? this.S.fscan.map : this.S.scan;
@@ -692,11 +695,20 @@ class HaCleanupPanel extends HTMLElement {
       }
       this.S.sel = new Set([...this.S.sel].filter((id) => r.outliers.some((o) => o.id === id)));
       this.renderOverview(); this.renderOutliers(); this.renderEntityTable(); this.renderEntityStats();
+      if (this.S.zoom) this.loadZoom();
     } catch (e) {
       this.S.loading = false; this.S.result = null;
       ov.innerHTML = `<div class="card-head"><h2>${esc(this.S.selected)}</h2></div><div class="empty msg-err">${esc(this.errMsg(e))}</div>`;
       this.$("out-card").hidden = true;
     }
+  }
+
+  zoomLabel() {
+    const z = this.S.zoom; if (!z) return "";
+    const f = new Intl.DateTimeFormat(this.lang, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: this.tz });
+    const g = new Intl.DateTimeFormat(this.lang, { hour: "2-digit", minute: "2-digit", ...(z.end - z.start < 3600 ? { second: "2-digit" } : {}), timeZone: this.tz });
+    const sameDay = new Date(z.start * 1000).toDateString() === new Date(z.end * 1000).toDateString();
+    return `${f.format(new Date(z.start * 1000))} – ${sameDay ? g.format(new Date(z.end * 1000)) : f.format(new Date(z.end * 1000))}`;
   }
 
   renderOverview() {
@@ -719,11 +731,14 @@ class HaCleanupPanel extends HTMLElement {
     ov.innerHTML = `
       <div class="card-head"><h2>Overview</h2>
         <span class="hint">${esc(SOURCES[r.source])} · ${kindLabel} · ${this.dt(r.start)} – ${this.dt(Math.min(r.end, Date.now() / 1000))}</span>
+        ${this.S.zoom ? `<span class="fchip" style="padding-right:10px" title="Drag again to zoom further">Zoom ${esc(this.zoomLabel())}</span>
+          <button class="btn small" data-act="zoom-reset">${I.restore}Reset zoom</button>` : ""}
         <div class="seg" id="chart-seg" role="group" aria-label="Chart scale"><button data-cm="normal" aria-pressed="${this.S.chartMode === "normal"}">Normal range</button><button data-cm="full" aria-pressed="${this.S.chartMode === "full"}">Full range</button></div></div>
       <div class="ov">
         <div class="ov-main"><div class="chart" id="chart"></div>
           <div class="legend"><span><i style="background:var(--accent)"></i>${r.kind === "sum" ? "change per period" : "value"}</span>${r.kind === "measurement" ? `<span><i class="band"></i>min – max per period</span>` : `<span id="band-legend" hidden><i class="band"></i>min – max per pixel</span>`}
-            <span><i class="dotc"></i>outlier</span>${r.limits?.min != null || r.limits?.max != null ? `<span><i class="dash"></i>plausible range</span>` : ""}</div></div>
+            <span><i class="dotc"></i>outlier</span>${r.limits?.min != null || r.limits?.max != null ? `<span><i class="dash"></i>plausible range</span>` : ""}
+            <span class="hint" style="margin-left:auto">${this.S.zoom ? "drag to zoom further · double-click or “Reset zoom” to see the whole period" : "drag across the chart to zoom into a time range"}</span></div></div>
         <div class="side">
           <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
           <div class="box"><h3>Detection</h3>
@@ -778,15 +793,49 @@ class HaCleanupPanel extends HTMLElement {
       </div></details>`;
   }
 
+  /** Outliers shown in chart and list: all, or only those inside the zoomed time range. */
+  visibleOutliers() {
+    const r = this.S.result; if (!r) return [];
+    const z = this.S.zoom;
+    return z ? r.outliers.filter((o) => o.ts >= z.start && o.ts <= z.end) : r.outliers;
+  }
+
+  zoomKey() { return `${this.S.selected}|${this.S.source}|${this.S.days}`; }
+
+  async zoomTo(start, end) {
+    if (end - start < 60) { const m = (start + end) / 2; start = m - 30; end = m + 30; }
+    this.S.zoom = { key: this.zoomKey(), start, end, chart: null, loading: true };
+    this.S.outPage = 1;
+    this.renderOverview(); this.renderOutliers();
+    await this.loadZoom();
+  }
+
+  async loadZoom() {
+    const z = this.S.zoom; if (!z) return;
+    z.loading = true;
+    try {
+      // Fetch the zoomed time range again so the chart shows every single value, not the downsampled overview.
+      const r = await this.ws("analyze", { entity_id: this.S.selected, source: this.S.source, start: z.start, end: z.end,
+        method: this.S.method || undefined, threshold: this.S.threshold || undefined });
+      if (this.S.zoom !== z) return;
+      z.chart = r.chart; z.count = r.stats.count || 0; z.loading = false;
+    } catch (e) { if (this.S.zoom === z) { this.S.zoom = null; this.toast(this.errMsg(e), true); } }
+    this.drawChart();
+  }
+
+  resetZoom() { if (!this.S.zoom) return; this.S.zoom = null; this.S.outPage = 1; this.renderOverview(); this.renderOutliers(); }
+
   drawChart() {
     const box = this.$("chart"), r = this.S.result; if (!box || !r) return;
     const W = Math.max(280, box.clientWidth), H = box.clientHeight || 260;
     const pad = { l: 56, r: 10, t: 10, b: 24 };
-    const c = r.chart, n = c.t.length;
-    if (!n) { box.innerHTML = `<div class="empty">No numeric values in this period.</div>`; return; }
-    const outs = r.outliers;
-    const t0 = r.start, t1 = Math.max(c.t[n - 1], Math.min(r.end, Date.now() / 1000));
-    const tmin = Math.min(t0, c.t[0]);
+    const z = this.S.zoom;
+    if (z && z.loading && !z.chart) { box.innerHTML = `<div class="loading" style="height:100%"><span class="spin"></span>Loading the zoomed range …</div>`; return; }
+    const c = z ? z.chart : r.chart, n = c.t.length;
+    if (!n) { box.innerHTML = `<div class="empty">${z ? "No values in the zoomed time range." : "No numeric values in this period."}</div>`; this.bindZoom(box, null); return; }
+    const outs = this.visibleOutliers();
+    const t1 = z ? z.end : Math.max(c.t[n - 1], Math.min(r.end, Date.now() / 1000));
+    const tmin = z ? z.start : Math.min(r.start, c.t[0]);
     let lo, hi;
     if (this.S.chartMode === "normal" && outs.length) {
       const flagged = new Set(outs.map((o) => o.value));
@@ -810,7 +859,8 @@ class HaCleanupPanel extends HTMLElement {
     for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) yt.push(Math.abs(v) < step * 1e-6 ? 0 : v);
     const xt = []; for (let k = 0; k <= 4; k++) xt.push(tmin + ((t1 - tmin) * k) / 4);
     const short = (t1 - tmin) < 2 * 86400;
-    const xf = new Intl.DateTimeFormat(this.lang, short ? { hour: "2-digit", minute: "2-digit", timeZone: this.tz } : { day: "2-digit", month: "2-digit", timeZone: this.tz });
+    const tiny = (t1 - tmin) < 2 * 3600;
+    const xf = new Intl.DateTimeFormat(this.lang, tiny ? { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: this.tz } : short ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: this.tz } : { day: "2-digit", month: "2-digit", timeZone: this.tz });
     let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Values over time">`;
     yt.forEach((v) => { svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${pad.l - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${esc(this.num(v, 2))}</text>`; });
     svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${H - pad.b}" y2="${H - pad.b}" stroke="var(--axis)"/>`;
@@ -837,8 +887,38 @@ class HaCleanupPanel extends HTMLElement {
     svg += `<line id="hover-line" x1="0" x2="0" y1="${pad.t}" y2="${H - pad.b}" stroke="var(--axis)" visibility="hidden"/></svg><div class="tip" hidden id="tip"></div>`;
     box.innerHTML = svg; box.style.opacity = "";
     this._chartGeom = { X, Y, W, H, pad, tmin, t1 };
-    box.onmousemove = (ev) => this.chartHover(ev);
+    this.bindZoom(box, this._chartGeom);
+    box.onmousemove = (ev) => { if (!this._drag) this.chartHover(ev); };
     box.onmouseleave = () => { this.$("tip").hidden = true; this.$("hover-line").setAttribute("visibility", "hidden"); };
+  }
+
+  bindZoom(box, g) {
+    box.classList.toggle("zoomable", !!g);
+    box.onpointerdown = (ev) => {
+      if (!g || ev.button !== 0) return;
+      const rect = box.getBoundingClientRect(), sx = rect.width / g.W;
+      const x0 = ev.clientX - rect.left;
+      if (x0 < g.pad.l * sx || x0 > (g.W - g.pad.r) * sx) return;
+      const sel = document.createElement("div"); sel.className = "zsel"; box.appendChild(sel);
+      this._drag = { x0, x1: x0, sel, rect, sx };
+      box.setPointerCapture(ev.pointerId);
+      this.$("tip") && (this.$("tip").hidden = true);
+    };
+    box.onpointermove = (ev) => {
+      const d = this._drag; if (!d) return;
+      d.x1 = Math.max(g.pad.l * d.sx, Math.min((g.W - g.pad.r) * d.sx, ev.clientX - d.rect.left));
+      d.sel.style.left = Math.min(d.x0, d.x1) + "px"; d.sel.style.width = Math.abs(d.x1 - d.x0) + "px";
+    };
+    box.onpointerup = (ev) => {
+      const d = this._drag; if (!d) return;
+      this._drag = null; d.sel.remove();
+      if (Math.abs(d.x1 - d.x0) < 8) return; // a click, e.g. on an outlier dot
+      const toT = (px) => g.tmin + ((px / d.sx - g.pad.l) / (g.W - g.pad.l - g.pad.r)) * (g.t1 - g.tmin);
+      this._noClick = true; setTimeout(() => (this._noClick = false), 0);
+      this.zoomTo(toT(Math.min(d.x0, d.x1)), toT(Math.max(d.x0, d.x1)));
+    };
+    box.onpointercancel = () => { if (this._drag) { this._drag.sel.remove(); this._drag = null; } };
+    box.ondblclick = () => this.resetZoom();
   }
 
   chartHover(ev) {
@@ -846,10 +926,10 @@ class HaCleanupPanel extends HTMLElement {
     const rect = box.getBoundingClientRect(), x = (ev.clientX - rect.left) * (g.W / rect.width);
     if (x < g.pad.l || x > g.W - g.pad.r) return;
     const t = g.tmin + ((x - g.pad.l) / (g.W - g.pad.l - g.pad.r)) * (g.t1 - g.tmin);
-    const c = r.chart; let best = 0, bd = Infinity;
+    const c = this.S.zoom?.chart || r.chart; let best = 0, bd = Infinity;
     for (let i = 0; i < c.t.length; i++) { const dd = Math.abs(c.t[i] - t); if (dd < bd) { bd = dd; best = i; } }
     let near = null; const tol = (g.t1 - g.tmin) / 150;
-    r.outliers.forEach((o) => { if (Math.abs(o.ts - t) < tol && (!near || Math.abs(o.ts - t) < Math.abs(near.ts - t))) near = o; });
+    this.visibleOutliers().forEach((o) => { if (Math.abs(o.ts - t) < tol && (!near || Math.abs(o.ts - t) < Math.abs(near.ts - t))) near = o; });
     const tip = this.$("tip"), u = this.unit(r.unit);
     const range = c.min[best] !== c.max[best] ? `<div class="sub">min ${this.num(c.min[best])} · max ${this.num(c.max[best])}</div>` : "";
     tip.innerHTML = `<div class="sub">${this.dt(c.t[best])}</div><b>${this.num(c.mean[best])}${u}</b>${range}` +
@@ -873,8 +953,9 @@ class HaCleanupPanel extends HTMLElement {
     const r = this.S.result, card = this.$("out-card"); if (!r) return;
     card.hidden = false;
     const isSum = r.kind === "sum", u = this.unit(r.unit);
-    let list = [...r.outliers];
+    let list = [...this.visibleOutliers()];
     if (this.S.sort === "score") list.sort((a, b) => b.score - a.score);
+    const zoomNote = this.S.zoom ? `<div class="banner info" style="margin-bottom:10px;padding:8px 14px">Showing ${this.int(list.length)} of ${this.int(r.outliers.length)} outliers in the zoomed time range ${esc(this.zoomLabel())}<span class="end"><button class="btn small" data-act="zoom-reset">${I.restore}Reset zoom</button></span></div>` : "";
     const per = 100, pages = Math.max(1, Math.ceil(list.length / per));
     this.S.outPage = Math.min(this.S.outPage, pages);
     const page = list.slice((this.S.outPage - 1) * per, this.S.outPage * per);
@@ -883,13 +964,13 @@ class HaCleanupPanel extends HTMLElement {
     const sumHint = isSum ? `<div class="banner info" style="margin-bottom:10px">This is a counter. A fix shifts the running total from that period onward by the difference, exactly like “Adjust sum” in Developer tools → Statistics. Energy dashboard values follow.</div>` : "";
     const stateHint = r.source === "states" && r.state_class ? `<div class="hint" style="margin-bottom:8px">Note: long-term statistics are calculated from states every 5 minutes. Fixing states does not change statistics that were already compiled – check “Hourly statistics” as well.</div>` : "";
     let head = `<div class="card-head"><h2>Outliers</h2><span class="hint">${this.int(r.total_outliers)} found in ${this.int(r.stats.count || 0)} values · ${esc(METHODS[r.info?.method]?.[0] || "")}${r.info?.method !== "range" ? `, sensitivity ${this.num(r.info?.threshold)}` : ""}${capped}</span>
-      <div class="seg" id="out-seg" role="group" aria-label="Sort"><button data-sort="time" aria-pressed="${this.S.sort === "time"}">By time</button><button data-sort="score" aria-pressed="${this.S.sort === "score"}">By severity</button></div></div>${sumHint}${stateHint}`;
+      <div class="seg" id="out-seg" role="group" aria-label="Sort"><button data-sort="time" aria-pressed="${this.S.sort === "time"}">By time</button><button data-sort="score" aria-pressed="${this.S.sort === "score"}">By severity</button></div></div>${zoomNote}${sumHint}${stateHint}`;
     if (n) head += `<div class="selbar"><b>${this.int(n)} selected</b>
       <button class="btn small primary" data-act="bulk-apply">${I.check}${isSum ? "Apply corrections" : "Replace with expected values"}</button>
       ${isSum ? "" : `<button class="btn small danger" data-act="bulk-delete">${I.trash}Delete</button>`}
       <span class="end"><button class="linkbtn" data-act="sel-none">Clear selection</button></span></div>`;
     if (!list.length) {
-      card.innerHTML = head + `<div class="empty">No outliers in this period with the current settings. 🎉<br><span class="hint">Try a longer period, a lower sensitivity or another source.</span></div>`;
+      card.innerHTML = head + `<div class="empty">${this.S.zoom ? "No outliers in the zoomed time range." : `No outliers in this period with the current settings. 🎉`}<br><span class="hint">Try a longer period, a lower sensitivity or another source.</span></div>`;
       return;
     }
     const allOnPage = page.length && page.every((o) => this.S.sel.has(o.id));
@@ -1592,7 +1673,8 @@ class HaCleanupPanel extends HTMLElement {
     if (ds.cm) { this.S.chartMode = ds.cm; this.$("chart-seg").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.cm === ds.cm)); this.drawChart(); return; }
     if (ds.lf) { this.S.logFilter = ds.lf; this.renderLogs(); return; }
     if (ds.oid && btn.tagName.toLowerCase() === "circle") {
-      const r = this.S.result, list = this.S.sort === "score" ? [...r.outliers].sort((a, b) => b.score - a.score) : r.outliers;
+      if (this._noClick) return;
+      const vis = this.visibleOutliers(), list = this.S.sort === "score" ? [...vis].sort((a, b) => b.score - a.score) : vis;
       const idx = list.findIndex((o) => String(o.id) === ds.oid);
       if (idx >= 0) { this.S.outPage = Math.floor(idx / 100) + 1; this.renderOutliers(); }
       const row = this.$("out-card").querySelector(`tr[data-oid="${ds.oid}"]`);
@@ -1627,6 +1709,7 @@ class HaCleanupPanel extends HTMLElement {
 
     switch (ds.act) {
       case "reanalyze": this.analyze(); break;
+      case "zoom-reset": this.resetZoom(); break;
       case "close-ana": this.closeAna(); break;
       case "scan": this.scanAll(); break;
       case "scan-stop": if (this.S.scanning) this.S.scanning.stop = true; break;
@@ -1700,7 +1783,7 @@ class HaCleanupPanel extends HTMLElement {
     else if (t.id === "method") { this.S.method = t.value; this.S.threshold = null; this.analyze(); }
     else if (t.id === "threshold") { const v = parseFloat(t.value); this.S.threshold = isFinite(v) && v > 0 ? v : null; this.analyze(); }
     else if (t.id === "out-all") {
-      const r = this.S.result, list = this.S.sort === "score" ? [...r.outliers].sort((a, b) => b.score - a.score) : r.outliers;
+      const vis = this.visibleOutliers(), list = this.S.sort === "score" ? [...vis].sort((a, b) => b.score - a.score) : vis;
       list.slice((this.S.outPage - 1) * 100, this.S.outPage * 100).forEach((o) => (t.checked ? this.S.sel.add(o.id) : this.S.sel.delete(o.id)));
       this.renderOutliers();
     } else if (t.dataset.osel) {
