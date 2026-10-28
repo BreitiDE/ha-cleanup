@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_cleanup"
 NAME = "Home Assistant Cleanup"
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 
 PANEL_URL_PATH = "ha-cleanup"
 PANEL_TITLE = "Cleanup"
@@ -16,6 +16,7 @@ STORAGE_VERSION = 1
 STORAGE_KEY_SETTINGS = f"{DOMAIN}.settings"
 STORAGE_KEY_LOG = f"{DOMAIN}.log"
 STORAGE_KEY_SCAN = f"{DOMAIN}.scan"
+STORAGE_KEY_FILTER_SCAN = f"{DOMAIN}.filter_scan"
 
 EVENT_SCAN_FINISHED = f"{DOMAIN}_scan_finished"
 NOTIFICATION_ID = f"{DOMAIN}_scan"

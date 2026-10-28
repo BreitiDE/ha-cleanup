@@ -66,6 +66,7 @@ class CleanupRuntime:
         )
         self.busy: str | None = None  # long running backup/restore job
         self.scanning: dict[str, Any] | None = None  # progress of a server-side scan
+        self.last_scan_error: str | None = None
         self._unsub_schedule: CALLBACK_TYPE | None = None
         hass.data[f"{DOMAIN}_db_path"] = self.db_path
 
@@ -98,7 +99,7 @@ class CleanupRuntime:
             if mode == "weekly" and now.weekday() != int(self.settings.get("auto_scan_weekday") or 0):
                 return
             self.hass.async_create_background_task(
-                self.async_scan_all(user="schedule", notify=True), f"{DOMAIN} automatic scan"
+                self.async_scan_all(user="schedule", notify=True, trigger="schedule"), f"{DOMAIN} automatic scan"
             )
 
         self._unsub_schedule = async_track_time_change(self.hass, _fire, hour=hour, minute=minute, second=0)
@@ -190,7 +191,7 @@ class CleanupRuntime:
             "time_zone": self.hass.config.time_zone,
             "last_scan": self._scan_summary(),
             "next_scan": self.next_scan(),
-            "scanning": self.scanning,
+            "scanning": self.scan_status(),
         }
 
     def _scan_summary(self) -> dict[str, Any] | None:
@@ -444,41 +445,125 @@ class CleanupRuntime:
 
     # ------------------------------------------------------------ full scan
 
-    async def async_scan_all(
-        self, user: str | None = None, notify: bool = False, days: float | None = None, trigger: str | None = None
+    def scan_status(self) -> dict[str, Any] | None:
+        """Progress of a running scan, without internal fields."""
+        sc = self.scanning
+        if not sc:
+            return None
+        return {k: v for k, v in sc.items() if k != "stop"}
+
+    def start_scan(
+        self, user: str | None, days: float | None, entity_ids: list[str] | None = None, pattern: str | None = None
     ) -> dict[str, Any]:
-        """Scan every numeric entity on the server, store the result, notify."""
+        """Start a scan as a background task in Home Assistant (keeps running when the panel is closed)."""
         if self.scanning:
             raise CleanupError("A scan is already running.")
-        days = float(days or self.settings.get("auto_scan_days") or self.settings["scan_days"])
+        mode = "filter" if entity_ids is not None else "all"
+        if mode == "filter" and not entity_ids:
+            raise CleanupError("No entity matches the filter.")
+        # Reserve the slot right away so a second click cannot start a parallel scan.
+        self.scanning = {"mode": mode, "pattern": pattern, "days": days, "done": 0, "total": len(entity_ids or []),
+                         "started": time.time(), "user": user, "stop": False}
+        self.last_scan_error = None
+
+        async def _run() -> None:
+            try:
+                await self.async_scan_all(user=user, days=days, trigger="panel", entity_ids=entity_ids,
+                                          pattern=pattern, reserved=True)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.exception("Scan failed")
+                self.last_scan_error = str(err)
+                self.scanning = None
+                await self.store.async_add_log(action="error", user=user, message=f"Scan failed: {err}")
+
+        self.hass.async_create_background_task(_run(), f"{DOMAIN} {mode} scan")
+        return self.scan_status()
+
+    def stop_scan(self) -> bool:
+        if not self.scanning:
+            return False
+        self.scanning["stop"] = True
+        return True
+
+    async def async_scan_all(
+        self,
+        user: str | None = None,
+        notify: bool = False,
+        days: float | None = None,
+        trigger: str | None = None,
+        entity_ids: list[str] | None = None,
+        pattern: str | None = None,
+        reserved: bool = False,
+    ) -> dict[str, Any]:
+        """Scan numeric entities on the server and store the result.
+
+        Without ``entity_ids`` every entity is scanned and the result becomes the
+        "last scan" (used by notifications). With ``entity_ids`` it is a filter
+        scan that is stored separately and never replaces the last full scan.
+        """
+        if self.scanning and not reserved:
+            raise CleanupError("A scan is already running.")
+        mode = "filter" if entity_ids is not None else "all"
+        if days is None or days <= 0:
+            days = self.settings.get("auto_scan_days") if trigger in ("schedule", "service") else self.settings["scan_days"]
+        days = float(days or 3)
         previous = self.store.last_scan
-        since = previous.get("ts") if previous else None
-        ents = [e for e in (await self.async_entities())["entities"] if e["has_states"]]
-        self.scanning = {"done": 0, "total": len(ents), "started": time.time()}
+        since = previous.get("ts") if previous and mode == "all" else None
+        try:
+            all_ents = [e for e in (await self.async_entities())["entities"] if e["has_states"]]
+        except Exception:
+            self.scanning = None
+            raise
+        if mode == "filter":
+            wanted = set(entity_ids)
+            ents = [e for e in all_ents if e["entity_id"] in wanted]
+        else:
+            ents = all_ents
+        state = self.scanning if reserved and self.scanning else {}
+        state.update({"mode": mode, "pattern": pattern, "days": days, "done": 0, "total": len(ents),
+                      "started": state.get("started", time.time()), "user": user, "stop": state.get("stop", False)})
+        self.scanning = state
         results: list[dict[str, Any]] = []
         try:
             for i in range(0, len(ents), 20):
+                if state["stop"]:
+                    break
                 chunk = [e["entity_id"] for e in ents[i : i + 20]]
                 results += await self._scan_chunk(chunk, days, since)
-                self.scanning["done"] = min(len(ents), i + 20)
+                state["done"] = min(len(ents), i + 20)
         finally:
+            aborted = bool(state.get("stop")) and state["done"] < len(ents)
             self.scanning = None
         units = {e["entity_id"]: e["unit"] for e in ents}
         names = {e["entity_id"]: e["name"] for e in ents}
         for r in results:
             r["unit"], r["name"] = units.get(r["entity_id"]), names.get(r["entity_id"])
-        scan = {"ts": time.time(), "days": days, "since": since, "trigger": trigger or user or "panel", "results": results}
+        scan = {"ts": time.time(), "days": days, "since": since, "trigger": trigger or user or "panel", "results": results,
+                "aborted": aborted, "scanned": len(results), "total": len(ents)}
+        stopped = f" · stopped after {len(results)} of {len(ents)}" if aborted else ""
+        if mode == "filter":
+            scan.update({"pattern": pattern, "ids": [e["entity_id"] for e in ents]})
+            await self.store.async_save_filter_scan(scan)
+            out = sum(int(r.get("outliers") or 0) for r in results)
+            hit = sum(1 for r in results if r.get("outliers"))
+            await self.store.async_add_log(
+                action="scan", user=user, count=out,
+                message=f"Filter {pattern or ''}: {out} outlier(s) in {hit} of {len(ents)} entities · last {days:g} days{stopped}",
+            )
+            return {"summary": {"ts": scan["ts"], "days": days, "entities": len(ents), "with_outliers": hit,
+                                "outliers": out, "aborted": aborted}, "results": results}
         await self.store.async_save_scan(scan)
         summary = self._scan_summary()
+        summary["aborted"] = aborted
         self.hass.bus.async_fire(EVENT_SCAN_FINISHED, {k: v for k, v in summary.items() if k != "trigger"})
         await self.store.async_add_log(
             action="scan",
             user=user,
             count=summary["outliers"],
             message=f"{summary['outliers']} outlier(s) in {summary['with_outliers']} of {summary['entities']} entities"
-            f" · last {days:g} days" + (f" · {summary['new']} new" if since else ""),
+            f" · last {days:g} days" + (f" · {summary['new']} new" if since else "") + stopped,
         )
-        if notify:
+        if notify and not aborted:
             await self.async_notify(scan, test=False)
         return {"summary": summary, "results": results}
 

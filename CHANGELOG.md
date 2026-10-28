@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.4 – 2026-10-27
+
+### Changed
+- **“Scan all” and “Scan filter” run in Home Assistant** as a background task, like the automatic scan. Leaving the page, closing the browser or reloading does not stop the scan, and the result is saved when it is finished.
+  - Coming back shows the progress again (“412 of 1,000 entities”), also on another device or browser tab; the header shows “scan running …” on every Cleanup page.
+  - Only one scan at a time: while a scan runs, “Scan all” and “Scan filter” are disabled (also for the service and the automatic scan).
+  - **Stop** ends the scan in Home Assistant; the partial result is kept and marked as “stopped, partial”.
+  - A filter scan is stored separately and still never replaces the last full scan.
+- Period “Last 30 days” is now **“Last 31 days”** in the scan period selector, the scan filter dialog and the analysis window.
+
 ## 1.2.3 – 2026-10-27
 
 ### Added

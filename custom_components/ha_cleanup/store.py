@@ -14,6 +14,7 @@ from .const import (
     DEFAULT_SETTINGS,
     LOG_MAX_ENTRIES,
     STORAGE_KEY_LOG,
+    STORAGE_KEY_FILTER_SCAN,
     STORAGE_KEY_SCAN,
     STORAGE_KEY_SETTINGS,
     STORAGE_VERSION,
@@ -31,6 +32,8 @@ class CleanupStore:
         self.log: list[dict[str, Any]] = []
         self._scan_store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY_SCAN)
         self.last_scan: dict[str, Any] | None = None
+        self._filter_store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY_FILTER_SCAN)
+        self.filter_scan: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         data = await self._settings_store.async_load()
@@ -44,6 +47,13 @@ class CleanupStore:
         scan = await self._scan_store.async_load()
         if isinstance(scan, dict) and isinstance(scan.get("results"), list):
             self.last_scan = scan
+        fscan = await self._filter_store.async_load()
+        if isinstance(fscan, dict) and isinstance(fscan.get("results"), list):
+            self.filter_scan = fscan
+
+    async def async_save_filter_scan(self, scan: dict[str, Any]) -> None:
+        self.filter_scan = scan
+        await self._filter_store.async_save(scan)
 
     async def async_save_scan(self, scan: dict[str, Any]) -> None:
         self.last_scan = scan

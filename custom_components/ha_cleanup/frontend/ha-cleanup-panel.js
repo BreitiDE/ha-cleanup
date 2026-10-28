@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.3";
+const VERSION = "1.2.4";
 
 const CSS = `
 :host {
@@ -238,7 +238,7 @@ const METHODS = {
   range: ["Plausible range only", "Only flags values outside the minimum / maximum you set for the entity."],
 };
 const DEF_THRESH = { spike: 6, iqr: 3, zscore: 4, range: 0 };
-const PERIODS = [[1, "24 hours"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"], [3650, "All"]];
+const PERIODS = [[1, "24 hours"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [31, "31 days"], [90, "90 days"], [365, "1 year"], [3650, "All"]];
 const ACTIONS = { edit: "Value changed", delete: "Values deleted", adjust: "Counter adjusted", undo: "Undo", backup: "Backup created",
   backup_delete: "Backup deleted", restore: "Restore", settings: "Settings saved", error: "Error",
   scan: "Scan", purge: "Orphans removed" };
@@ -434,7 +434,7 @@ class HaCleanupPanel extends HTMLElement {
   async loadLastScan() {
     try {
       const r = await this.ws("scan/last");
-      if (r.scan && !this.S.scanning) {
+      if (r.scan) {
         this.S.lastScan = r.scan;
         this.S.scan = new Map(r.scan.results.map((x) => [x.entity_id, x]));
         if (this.S.view === "entities") { this.renderEntityStats(); this.renderEntityTable(); }
@@ -450,6 +450,7 @@ class HaCleanupPanel extends HTMLElement {
       this.$("status-dot").className = "dot " + (i.busy || i.scanning ? "busy" : "ok");
       this.$("status-text").textContent = i.scanning ? `scan running ${i.scanning.done}/${i.scanning.total} …` : i.busy ? `${i.busy} running …` : `Recorder · ${i.engine === "sqlite" ? "SQLite" : i.engine}${i.db_size ? " · " + this.bytes(i.db_size) : ""}`;
       this.renderBanners();
+      if (i.scanning && !this._polling) { this.S.scanning = i.scanning; this.renderScanProgress(); this.pollScan(); }
       if (this.S.view === "entities") this.renderEntityStats();
       if (this.S.view === "backup") this.renderBackupStats();
       if (this.S.view === "logs") this.renderLogs();
@@ -497,6 +498,7 @@ class HaCleanupPanel extends HTMLElement {
         </section>`;
     }
     if (this.$("picker").value !== this.S.q) this.$("picker").value = this.S.q;
+    this.renderScanProgress();
     this.renderEntityStats();
     if (!this.S.entities) this.loadEntities();
     else this.renderEntityTable();
@@ -530,7 +532,7 @@ class HaCleanupPanel extends HTMLElement {
     if (this.S.scanDays == null) this.S.scanDays = def;
     const keep = i?.keep_days;
     // States only exist for the recorder's keep_days, so longer periods add nothing.
-    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [30, "Last 30 days"]];
+    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [31, "Last 31 days"]];
     if (keep) { opts = opts.filter(([d]) => d < keep); opts.push([keep, `All kept (${keep} days)`]); }
     if (!opts.some(([d]) => d === def)) opts.push([def, `Last ${this.num(def)} days`]);
     if (this.S.scanDays !== def && !opts.some(([d]) => d === this.S.scanDays)) opts.push([this.S.scanDays, `Last ${this.num(this.S.scanDays)} days`]);
@@ -560,7 +562,7 @@ class HaCleanupPanel extends HTMLElement {
     const tiles = [
       ["Numeric entities", this.S.entities ? this.int(ents.length) : "…", this.S.entities ? `${this.int(ents.filter((e) => e.exists).length)} active · ${this.int(ents.filter((e) => e.has_states).length)} with history` : "loading"],
       ["Long-term statistics", this.S.entities ? this.int(withStats.length) : "…", `${this.int(withStats.length - counters)} measured · ${this.int(counters)} counter${counters === 1 ? "" : "s"}`],
-      ["Outliers found", scanned.length ? this.int(totalOut) : "–", scanned.length ? (fs ? `in ${this.int(withOut.length)} of ${this.int(scanned.length)} filtered entities` : `in ${this.int(withOut.length)} entities · ${this.S.lastScan ? this.ago(this.S.lastScan.ts) : "just now"}`) : (i?.next_scan ? `next scan ${this.shortDt(i.next_scan)}` : "run “Scan all”"), totalOut ? "bad" : ""],
+      ["Outliers found", scanned.length ? this.int(totalOut) : "–", scanned.length ? (fs ? `in ${this.int(withOut.length)} of ${this.int(scanned.length)} filtered entities` : `in ${this.int(withOut.length)} entities · ${this.S.lastScan ? this.ago(this.S.lastScan.ts) + (this.S.lastScan.aborted ? " · stopped, partial" : "") : "just now"}`) : (i?.next_scan ? `next scan ${this.shortDt(i.next_scan)}` : "run “Scan all”"), totalOut ? "bad" : ""],
       ["Orphaned", this.S.entities ? this.int(orphaned) : "…", "entity no longer exists"],
       ["Database", i?.db_size ? this.bytes(i.db_size) : (i ? (i.engine === "sqlite" ? "–" : i.engine) : "…"), i ? `states kept ${i.keep_days} days` : ""],
       ["Changes", i ? this.int(i.changes_30d) : "…", i ? `${this.int(i.changed_values_30d)} values · last 30 days` : ""],
@@ -1135,66 +1137,96 @@ class HaCleanupPanel extends HTMLElement {
     } catch (e) { this.toast(this.errMsg(e), true); }
   }
 
+  // Scans run as a background task inside Home Assistant. The panel only starts them and shows the progress,
+  // so leaving the page, closing the browser or a second device does not stop or duplicate a scan.
   async scanAll() {
-    const ents = (this.S.entities || []).filter((e) => e.has_states);
-    if (!ents.length || this.S.scanning) return;
+    if (this.S.scanning) { this.toast("A scan is already running.", true); return; }
     const days = this.S.scanDays ?? this.S.info?.settings.scan_days ?? 3;
-    this.S.fscan = null;
-    this.S.scan = new Map(); this.S.lastScan = null;
-    const map = await this.runScan(ents, days, this.S.scan);
-    if (!map) return;
-    const found = [...map.values()].filter((x) => x.outliers).length;
-    this.toast(`Scan finished: ${found} entit${found === 1 ? "y" : "ies"} with outliers`);
-    if (!this.S.scanStopped) {
-      const results = [...map.values()].map((x) => { const e = this.S.entities.find((y) => y.entity_id === x.entity_id); return { ...x, unit: e?.unit ?? null, name: e?.name ?? null }; });
-      try { const r = await this.ws("scan/save", { days, results }); this.S.lastScan = r.scan; this.loadInfo(); } catch {}
-    }
-    if (found) { this.S.entityFilter = "outliers"; this.S.entityPage = 1; }
-    this.renderEntityStats(); this.renderEntityTable();
+    try {
+      const r = await this.ws("scan/start", { days });
+      this.S.myScan = { mode: "all" }; this.S.scanning = r.scanning;
+      this.renderScanProgress(); this.pollScan();
+    } catch (e) { this.toast(this.errMsg(e), true); this.pollScan(); }
   }
 
-  /** Scan only the entities matching a pattern. The result is kept in the panel, the last full scan stays untouched. */
+  /** Scan only the entities matching a pattern. Stored separately, the last full scan stays untouched. */
   async scanFiltered(pattern, days) {
+    if (this.S.scanning) { this.toast("A scan is already running.", true); return; }
     const ents = this.matchPattern(pattern);
-    if (!ents.length || this.S.scanning) return;
+    if (!ents.length) return;
     pattern = pattern.split(",").map((t) => t.trim()).filter(Boolean).join(", ");
     this.S.recent = [pattern, ...this.S.recent.filter((r) => r !== pattern)].slice(0, 6);
-    this.S.fscan = { pattern, days, ts: Date.now() / 1000, ids: ents.map((e) => e.entity_id), map: new Map() };
-    this.S.entityPage = 1;
-    const map = await this.runScan(ents, days, this.S.fscan.map);
-    if (!map) return;
-    this.S.fscan.ts = Date.now() / 1000;
-    const found = [...map.values()].filter((x) => x.outliers);
-    this.S.entityFilter = found.length ? "outliers" : "all";
-    this.renderEntityStats(); this.renderEntityTable();
-    if (ents.length === 1) { this.pick(ents[0].entity_id); return; }
-    this.toast(`Filter scan: ${found.length} of ${ents.length} entit${ents.length === 1 ? "y" : "ies"} with outliers`);
+    try {
+      const r = await this.ws("scan/start", { days, entity_ids: ents.map((e) => e.entity_id), pattern });
+      this.S.myScan = { mode: "filter", single: ents.length === 1 ? ents[0].entity_id : null }; this.S.scanning = r.scanning;
+      this.saveUI(); this.renderScanProgress(); this.pollScan();
+    } catch (e) { this.toast(this.errMsg(e), true); this.pollScan(); }
   }
 
-  async runScan(ents, days, map) {
-    this.S.scanning = { done: 0, total: ents.length, stop: false }; this.S.scanStopped = false;
-    const prog = () => { const s = this.S.scanning; this.$("scan-progress").innerHTML = s ? `<div class="banner info" style="margin-bottom:10px"><span class="spin"></span>
-      <span>Scanning the last ${this.num(days)} days: ${this.int(s.done)} of ${this.int(s.total)} entities</span><div class="bar" style="flex:1"><div style="width:${(s.done / s.total) * 100}%"></div></div>
-      <button class="btn small" data-act="scan-stop">Stop</button></div>` : ""; };
-    prog(); this.renderEntityStats(); this.renderEntityTable();
-    const chunk = 12;
+  renderScanProgress() {
+    const s = this.S.scanning;
+    const box = this.$("scan-progress");
+    if (box) {
+      box.innerHTML = s ? `<div class="banner info" style="margin-bottom:10px"><span class="spin"></span>
+        <span>${s.mode === "filter" ? `Filter scan <span class="mono">${esc(s.pattern || "")}</span>` : "Scan all"} · last ${this.num(s.days)} days: ${s.total ? `${this.int(s.done)} of ${this.int(s.total)} entities` : "preparing …"}${s.stopping ? " · stopping …" : ""} <span class="hint">· runs in Home Assistant, you can leave this page</span></span>
+        <div class="bar" style="flex:1"><div style="width:${s.total ? (s.done / s.total) * 100 : 0}%"></div></div>
+        <button class="btn small" data-act="scan-stop" ${s.stopping ? "disabled" : ""}>${I.x}Stop</button></div>` : "";
+    }
+    this.shadowRoot.querySelectorAll('[data-act="scan"], [data-act="scan-filter"]').forEach((b) => {
+      b.disabled = !!s; b.title = s ? "A scan is running – wait until it is finished or stop it" : "";
+    });
+    if (s) { this.$("status-dot").className = "dot busy"; this.$("status-text").textContent = s.total ? `scan running ${s.done}/${s.total} …` : "scan starting …"; }
+  }
+
+  async pollScan() {
+    if (this._polling) return;
+    this._polling = true;
+    let wasRunning = !!this.S.scanning, mode = this.S.scanning?.mode;
     try {
-      for (let i = 0; i < ents.length && !this.S.scanning.stop; i += chunk) {
-        const ids = ents.slice(i, i + chunk).map((e) => e.entity_id);
-        const r = await this.ws("scan", { entity_ids: ids, days });
-        r.results.forEach((x) => map.set(x.entity_id, x));
-        this.S.scanning.done = Math.min(ents.length, i + chunk); prog();
-        if (i % (chunk * 5) === 0) { this.renderEntityStats(); this.renderEntityTable(); }
+      for (;;) {
+        if (!this.isConnected) return; // an old copy of the panel: the new one polls itself
+        let st;
+        try { st = await this.ws("scan/status"); } catch { await new Promise((r) => setTimeout(r, 3000)); continue; }
+        const stopping = this.S.scanning?.stopping;
+        this.S.scanning = st.scanning ? { ...st.scanning, stopping } : null;
+        if (st.scanning) { wasRunning = true; mode = st.scanning.mode; }
+        this.renderScanProgress();
+        if (!st.scanning) {
+          if (wasRunning) await this.scanFinished(mode, st.error);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
       }
-    } catch (e) { this.toast(this.errMsg(e), true); this.S.scanning = null; prog(); return null; }
-    this.S.scanStopped = this.S.scanning.stop;
-    this.S.scanning = null; prog();
-    return map;
+    } finally { this._polling = false; }
+  }
+
+  async scanFinished(mode, error) {
+    const mine = this.S.myScan; this.S.myScan = null;
+    this.loadInfo();
+    if (error) { this.toast("Scan failed: " + error, true); return; }
+    if (mode === "filter") {
+      const st = await this.ws("scan/status", { with_filter: true }).catch(() => null);
+      const f = st?.filter; if (!f) return;
+      this.S.fscan = { pattern: f.pattern, days: f.days, ts: f.ts, ids: f.ids, map: new Map(f.results.map((x) => [x.entity_id, x])) };
+      const found = f.results.filter((x) => x.outliers).length;
+      this.S.entityFilter = found ? "outliers" : "all"; this.S.entityPage = 1;
+      if (this.S.view === "entities") { this.renderEntityStats(); this.renderEntityTable(); }
+      if (mine?.single && !f.aborted) { this.pick(mine.single); return; }
+      this.toast(f.aborted ? `Filter scan stopped after ${f.scanned} of ${f.total} entities` : `Filter scan: ${found} of ${f.ids.length} entit${f.ids.length === 1 ? "y" : "ies"} with outliers`);
+      return;
+    }
+    await this.loadLastScan();
+    this.S.fscan = null;
+    const ls = this.S.lastScan;
+    const found = ls ? ls.results.filter((x) => x.outliers).length : 0;
+    if (found) { this.S.entityFilter = "outliers"; this.S.entityPage = 1; }
+    if (this.S.view === "entities") { this.renderEntityStats(); this.renderEntityTable(); }
+    this.toast(ls?.aborted ? `Scan stopped after ${ls.scanned} of ${ls.total} entities – partial result shown` : `Scan finished: ${found} entit${found === 1 ? "y" : "ies"} with outliers`);
   }
 
   filterDialog(preset) {
     const def = Number(this.S.info?.settings.scan_days ?? 3), keep = this.S.info?.keep_days;
-    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [30, "Last 30 days"]];
+    let opts = [[1, "Last 24 hours"], [3, "Last 3 days"], [7, "Last 7 days"], [14, "Last 14 days"], [31, "Last 31 days"]];
     if (keep) { opts = opts.filter(([d]) => d < keep); opts.push([keep, `All kept (${keep} days)`]); }
     if (!opts.some(([d]) => d === def)) opts.push([def, `Last ${this.num(def)} days`]);
     opts.sort((a, b) => a[0] - b[0]);
@@ -1746,7 +1778,9 @@ class HaCleanupPanel extends HTMLElement {
       case "zoom-reset": this.resetZoom(); break;
       case "close-ana": this.closeAna(); break;
       case "scan": this.scanAll(); break;
-      case "scan-stop": if (this.S.scanning) this.S.scanning.stop = true; break;
+      case "scan-stop":
+        if (this.S.scanning) { this.S.scanning.stopping = true; this.renderScanProgress(); try { await this.ws("scan/stop"); } catch (err) { this.toast(this.errMsg(err), true); } }
+        break;
       case "purge-selected": this.purgeOrphans([...this.S.orphanSel]); break;
       case "orph-all": this.S.entities.filter((x) => x.orphaned).forEach((x) => this.S.orphanSel.add(x.entity_id)); this.renderEntityTable(); break;
       case "orph-none": this.S.orphanSel.clear(); this.renderEntityTable(); break;
@@ -1858,6 +1892,7 @@ class HaCleanupPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._hass && this.S.info) { this.loadInfo(); this.loadLastScan(); }
     if (this._submitBound) return;
     this._submitBound = true;
     this.shadowRoot.addEventListener("submit", (e) => { if (e.target.id === "settings-form") { e.preventDefault(); this.saveSettings(e.target); } });

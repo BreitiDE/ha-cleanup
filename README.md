@@ -21,6 +21,7 @@ A sidebar panel for Home Assistant that finds **outliers in recorded sensor valu
 - Actions per outlier: **replace with the expected value** (✓), **edit**, **delete**; bulk actions for a selection.
 - Counters (`total_increasing`, energy): fixes are applied as a sum adjustment from that hour onward – the same thing *Developer tools → Statistics → Adjust sum* does.
 - The entity list can be sorted by name, values scanned or outliers (click the column header).
+- Scans run in Home Assistant in the background: you can leave the page, the progress is shown again when you come back. Only one scan runs at a time; Stop keeps the partial result.
 - **Scan all** checks every entity and lists the ones with outliers first; the period is chosen right next to the button (default from the settings).
 - **Scan filter** checks only the entities you name: one entity or patterns like `sensor.*`, `*victron*` (comma-separated). The last full scan stays as it is.
 - The panel keeps its view (filters, page, scan filter, open analysis) when you leave and come back.

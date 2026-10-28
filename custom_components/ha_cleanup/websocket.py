@@ -149,11 +149,32 @@ async def _settings_set(rt, msg, user):
 
 
 async def _scan_last(rt, msg, user):
-    return {"scan": rt.store.last_scan, "next_scan": rt.next_scan(), "scanning": rt.scanning}
+    return {"scan": rt.store.last_scan, "next_scan": rt.next_scan(), "scanning": rt.scan_status()}
+
+
+async def _scan_start(rt, msg, user):
+    return {"scanning": rt.start_scan(user, msg.get("days"), msg.get("entity_ids"), msg.get("pattern"))}
+
+
+async def _scan_stop(rt, msg, user):
+    return {"stopping": rt.stop_scan()}
+
+
+async def _scan_status(rt, msg, user):
+    last = rt.store.last_scan
+    f = rt.store.filter_scan
+    return {
+        "scanning": rt.scan_status(),
+        "error": rt.last_scan_error,
+        "last_ts": last.get("ts") if last else None,
+        "filter_ts": f.get("ts") if f else None,
+        "filter": f if msg.get("with_filter") else None,
+    }
 
 
 async def _scan_run(rt, msg, user):
-    res = await rt.async_scan_all(user=user, notify=bool(msg.get("notify")), days=msg.get("days"), trigger="panel")
+    days = msg.get("days") or rt.settings.get("auto_scan_days")
+    res = await rt.async_scan_all(user=user, notify=bool(msg.get("notify")), days=days, trigger="panel")
     return {"summary": res["summary"], "scan": rt.store.last_scan}
 
 
@@ -282,6 +303,17 @@ COMMANDS = [
         _scan_save,
     ),
     ({vol.Required("type"): f"{DOMAIN}/notify/test"}, _notify_test),
+    (
+        {
+            vol.Required("type"): f"{DOMAIN}/scan/start",
+            vol.Optional("days"): _num,
+            vol.Optional("entity_ids"): [str],
+            vol.Optional("pattern"): vol.Any(None, str),
+        },
+        _scan_start,
+    ),
+    ({vol.Required("type"): f"{DOMAIN}/scan/stop"}, _scan_stop),
+    ({vol.Required("type"): f"{DOMAIN}/scan/status", vol.Optional("with_filter"): bool}, _scan_status),
     (
         {vol.Required("type"): f"{DOMAIN}/orphans/purge", vol.Required("entity_ids"): [str], vol.Optional("backup"): bool},
         _purge,
