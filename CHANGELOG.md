@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.5 – 2026-10-29
+
+### Added
+- Small **PayPal** donate button next to the database box (opens https://paypal.me/breitide in a new tab; mouse-over: “Eine kleine Spende geben, Danke”).
+- Donate link in the README.
+
 ## 1.2.4 – 2026-10-27
 
 ### Changed

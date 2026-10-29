@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.4";
+const VERSION = "1.2.5";
 
 const CSS = `
 :host {
@@ -193,6 +193,10 @@ footer { color:var(--muted); font-size:12px; display:flex; flex-wrap:wrap; gap:1
 .chips button { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; padding:3px 8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--ink); cursor:pointer; }
 .chips button:hover { background:var(--hover); }
 .target.db { cursor:help; }
+.donate { display:inline-flex; align-items:center; gap:6px; min-height:38px; border:1px solid var(--border); background:var(--surface); color:var(--ink);
+  border-radius:8px; padding:9px 12px; text-decoration:none; font-weight:600; font-size:13px; white-space:nowrap; }
+.donate svg { color:var(--accent); }
+.donate:hover { background:var(--hover); }
 /* analysis overlay */
 .overlay { position:fixed; inset:0; z-index:40; background:rgba(11,11,11,.55); overflow:auto; overscroll-behavior:contain; padding:24px 20px; }
 .sheet { max-width:1400px; margin:0 auto; background:var(--page); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }
@@ -242,6 +246,7 @@ const PERIODS = [[1, "24 hours"], [3, "3 days"], [7, "7 days"], [14, "14 days"],
 const ACTIONS = { edit: "Value changed", delete: "Values deleted", adjust: "Counter adjusted", undo: "Undo", backup: "Backup created",
   backup_delete: "Backup deleted", restore: "Restore", settings: "Settings saved", error: "Error",
   scan: "Scan", purge: "Orphans removed" };
+const DONATE_URL = "https://paypal.me/breitide";
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 class HaCleanupPanel extends HTMLElement {
@@ -483,6 +488,7 @@ class HaCleanupPanel extends HTMLElement {
           <button class="btn primary" data-act="scan">${I.scan}Scan all</button>
           <button class="btn" data-act="scan-filter">${I.filter}Scan filter …</button>
           <div class="target db" id="db-box">${I.db}<code id="db-path">–</code></div>
+          <a class="donate" href="${DONATE_URL}" target="_blank" rel="noopener" title="Eine kleine Spende geben, Danke" aria-label="Eine kleine Spende geben, Danke"><svg class="i" viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.6C1.2 9.6 2.6 6 6 5.6c2-.2 3.4.9 4 2 .6-1.1 2-2.2 4-2 3.4.4 4.8 4 3.3 6.8C19 16.6 12 21 12 21z" fill="currentColor" stroke="none"/></svg>PayPal</a>
         </div>
         <div id="fscan-bar"></div>
         <section class="stats" id="entity-stats" aria-label="Statistics"></section>

@@ -78,5 +78,9 @@ Copy `custom_components/ha_cleanup` into `/config/custom_components/`, restart, 
 ## Requirements
 Home Assistant 2025.3 or newer with the default recorder.
 
+## Support
+
+☕ Like the integration? [Donate via PayPal](https://paypal.me/breitide) – thank you!
+
 ## License
 MIT
