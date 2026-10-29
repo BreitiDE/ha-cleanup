@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.6 – 2026-10-29
+
+### Changed
+- The donate button moved to the top right of the menu bar (after “signed in as”) and is now labelled **“Unterstützen”** (German Home Assistant) or **“Donate”** (all other languages).
+- On mouse-over (or keyboard focus) a small overlay says “Danke für Deine Unterstützung, über eine kleine Spende würde ich mich freuen.” / “Thank you for your support. I would be happy about a small donation.”
+- The link still opens https://paypal.me/breitide in a new tab.
+
 ## 1.2.5 – 2026-10-29
 
 ### Added

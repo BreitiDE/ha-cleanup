@@ -1,5 +1,5 @@
 /* Home Assistant Cleanup – sidebar panel (vanilla web component, no build step). */
-const VERSION = "1.2.5";
+const VERSION = "1.2.6";
 
 const CSS = `
 :host {
@@ -193,10 +193,17 @@ footer { color:var(--muted); font-size:12px; display:flex; flex-wrap:wrap; gap:1
 .chips button { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; padding:3px 8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--ink); cursor:pointer; }
 .chips button:hover { background:var(--hover); }
 .target.db { cursor:help; }
-.donate { display:inline-flex; align-items:center; gap:6px; min-height:38px; border:1px solid var(--border); background:var(--surface); color:var(--ink);
-  border-radius:8px; padding:9px 12px; text-decoration:none; font-weight:600; font-size:13px; white-space:nowrap; }
+.donate-wrap { position:relative; display:inline-flex; }
+.donate { display:inline-flex; align-items:center; gap:6px; min-height:30px; border:1px solid var(--border); background:var(--surface); color:var(--ink);
+  border-radius:8px; padding:5px 10px; text-decoration:none; font-weight:600; font-size:13px; white-space:nowrap; }
 .donate svg { color:var(--accent); }
 .donate:hover { background:var(--hover); }
+.donate-tip { position:absolute; right:0; top:calc(100% + 8px); width:250px; z-index:60; padding:10px 12px; border-radius:8px;
+  background:var(--surface); color:var(--ink); border:1px solid var(--border); box-shadow:var(--shadow); font-size:13px; line-height:1.45; font-weight:400;
+  opacity:0; visibility:hidden; transform:translateY(-4px); transition:opacity .15s, transform .15s, visibility .15s; pointer-events:none; white-space:normal; }
+.donate-tip::before { content:""; position:absolute; right:22px; top:-6px; width:10px; height:10px; background:var(--surface);
+  border-left:1px solid var(--border); border-top:1px solid var(--border); transform:rotate(45deg); }
+.donate-wrap:hover .donate-tip, .donate:focus-visible + .donate-tip { opacity:1; visibility:visible; transform:none; }
 /* analysis overlay */
 .overlay { position:fixed; inset:0; z-index:40; background:rgba(11,11,11,.55); overflow:auto; overscroll-behavior:contain; padding:24px 20px; }
 .sheet { max-width:1400px; margin:0 auto; background:var(--page); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }
@@ -293,6 +300,8 @@ class HaCleanupPanel extends HTMLElement {
 
   // ------------------------------------------------------------------ formatting
   get lang() { return this._hass?.locale?.language || this._hass?.language || navigator.language || "en"; }
+  /** Donate button follows the Home Assistant language: German → German, everything else → English. */
+  get isDe() { return String(this.lang).toLowerCase().startsWith("de"); }
   get tz() { const l = this._hass?.locale; return l && l.time_zone === "local" ? undefined : this._hass?.config?.time_zone; }
   num(v, max = 3) {
     if (v == null || !isFinite(v)) return "–";
@@ -348,6 +357,10 @@ class HaCleanupPanel extends HTMLElement {
         <div class="who">
           <span><span class="dot" id="status-dot"></span> <span id="status-text">connecting …</span></span>
           <span>signed in as <b id="who-user">${esc(this._hass.user?.name || "–")}</b></span>
+          <span class="donate-wrap">
+            <a class="donate" id="donate" href="${DONATE_URL}" target="_blank" rel="noopener" aria-describedby="donate-tip"><svg class="i" viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.6C1.2 9.6 2.6 6 6 5.6c2-.2 3.4.9 4 2 .6-1.1 2-2.2 4-2 3.4.4 4.8 4 3.3 6.8C19 16.6 12 21 12 21z" fill="currentColor" stroke="none"/></svg><span id="donate-label">${this.isDe ? "Unterstützen" : "Donate"}</span></a>
+            <span class="donate-tip" id="donate-tip" role="tooltip">${this.isDe ? "Danke für Deine Unterstützung, über eine kleine Spende würde ich mich freuen." : "Thank you for your support. I would be happy about a small donation."}</span>
+          </span>
         </div>
       </div></header>
       <main class="wrap">
@@ -488,7 +501,6 @@ class HaCleanupPanel extends HTMLElement {
           <button class="btn primary" data-act="scan">${I.scan}Scan all</button>
           <button class="btn" data-act="scan-filter">${I.filter}Scan filter …</button>
           <div class="target db" id="db-box">${I.db}<code id="db-path">–</code></div>
-          <a class="donate" href="${DONATE_URL}" target="_blank" rel="noopener" title="Eine kleine Spende geben, Danke" aria-label="Eine kleine Spende geben, Danke"><svg class="i" viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.6C1.2 9.6 2.6 6 6 5.6c2-.2 3.4.9 4 2 .6-1.1 2-2.2 4-2 3.4.4 4.8 4 3.3 6.8C19 16.6 12 21 12 21z" fill="currentColor" stroke="none"/></svg>PayPal</a>
         </div>
         <div id="fscan-bar"></div>
         <section class="stats" id="entity-stats" aria-label="Statistics"></section>
